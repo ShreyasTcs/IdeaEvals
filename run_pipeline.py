@@ -116,10 +116,26 @@ def main():
         # Use tqdm to show progress as futures complete
         for future in tqdm(as_completed(future_to_idea), total=len(ideas), desc="Processing Ideas"):
             result = future.result()
+            
+            # Combine LLM outputs
+            llm_output = {
+                "extracted_files_content": result.pop('extracted_files_content', ''),
+                "content_type": result.pop('content_type', 'unknown'),
+                "theme": result.pop('theme', {}),
+                "industry": result.pop('industry', {}),
+                "technologies": result.pop('technologies', {}),
+                "evaluation": result.pop('evaluation', {}),
+                "verification": result.pop('verification', {})
+            }
+            result['llm_output'] = llm_output
+            
             all_results.append(result)
+            
+            # Save results incrementally
+            output_helper.save_results(all_results)
 
-    # --- Save Results ---
-    print(f"\n💾 Saving results to {output_filepath}...")
+    # --- Final Save ---
+    print(f"\n💾 Finalizing results at {output_filepath}...")
     output_helper.save_results(all_results)
     print("✓ Results saved.\n")
 

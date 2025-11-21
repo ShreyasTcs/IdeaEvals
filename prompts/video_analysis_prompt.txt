@@ -1,0 +1,20 @@
+Analyze this video by examining {len_frame_messages} frames extracted at regular intervals.
+
+                    Video: {video_name}
+
+                    Provide a comprehensive summary including:
+                    1. **Main Topic/Purpose**: What is this video about?
+                    2. **Key Points**: What are the main points shown across the frames?
+                    3. **Visual Elements**: What UI, screens, diagrams, or demonstrations are shown?
+                    4. **Technical Details**: Any technology, code, systems, or implementation shown?
+                    5. **Workflow/Process**: What process or workflow is demonstrated?
+
+                    Classification:
+                    - **Prototype**: Shows working UI/demo, technical implementation, code, system architecture, working application
+                    - **Text**: Only concepts, slides, presentations with no technical demonstration
+
+                    Return ONLY valid JSON:
+                    {{
+                    "content": "Comprehensive detailed summary covering all 5 points above",
+                    "content_type": "Prototype" or "Text"
+                    }}

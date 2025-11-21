@@ -1,0 +1,14 @@
+Analyze this Word document content:
+
+                        {content}
+
+                        Determine:
+                        1. Main topic and purpose
+                        2. Technical content, code, or implementation details
+                        3. Is this a concept document or does it describe a working prototype?
+
+                        Return JSON:
+                        {{
+                        "content": "Detailed analysis",
+                        "content_type": "Prototype" or "Text"
+                        }}

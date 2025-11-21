@@ -1,0 +1,22 @@
+
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT.
+The JSON object must have the following structure:
+{
+    "scores": {
+        "novelty_and_innovation": {
+            "score": <int, 1-10>,
+            "justification": "<string>"
+        },
+        "business_potential_and_impact": {
+            "score": <int, 1-10>,
+            "justification": "<string>"
+        },
+        // ... other rubric criteria ...
+    },
+    "weighted_total": <float>,
+    "investment_recommendation": "<string, one of: 'strong-yes', 'consider-with-mitigations', 'no-go'>",
+    "key_strengths": ["<string>", ...],
+    "key_concerns": ["<string>", ...]
+}
+Ensure all scores are integers between 1 and 10.
+The "weighted_total" will be recalculated by the system, so focus on accurate individual scores.

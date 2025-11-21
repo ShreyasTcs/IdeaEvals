@@ -8,6 +8,7 @@ from llm.llm_provider import LLMProvider
 from core.classification.tcs_classifier import TCSClassifier
 from core.evaluation.idea_evaluator import IdeaEvaluator
 from core.extraction.file_extractor import FileExtractor
+from core.verification.verification_processor import VerificationProcessor
 
 class IdeaProcessor:
     """
@@ -21,6 +22,7 @@ class IdeaProcessor:
         self.classifier = TCSClassifier(llm_provider)
         self.evaluator = IdeaEvaluator(llm_provider)
         self.extractor = FileExtractor()
+        self.verifier = VerificationProcessor(rubrics)
 
     def process_idea(self, idea_data: Dict[str, Any], additional_files_dir: Path) -> Dict[str, Any]:
         """
@@ -29,6 +31,7 @@ class IdeaProcessor:
         # 1. Extract content from associated files
         idea_id = idea_data.get("idea_id")
         all_files_content = []
+        content_types = []
         if idea_id:
             idea_dir = additional_files_dir / str(idea_id)
             if idea_dir.is_dir():
@@ -36,8 +39,17 @@ class IdeaProcessor:
                     if file_path.is_file():
                         extraction_result = self.extractor.extract_content(file_path)
                         all_files_content.append(f"--- START OF FILE: {file_path.name} ---\n{extraction_result['text']}\n--- END OF FILE: {file_path.name} ---\n")
+                        if 'content_type' in extraction_result:
+                            content_types.append(extraction_result['content_type'])
 
         idea_data['extracted_files_content'] = "\n".join(all_files_content)
+        
+        # Determine overall content type
+        overall_content_type = "Text"
+        if "Prototype" in content_types:
+            overall_content_type = "Prototype"
+        idea_data['content_type'] = overall_content_type
+        
         logger.debug(f"Extracted content for idea {idea_id}: {idea_data['extracted_files_content'][:1000]}...")
 
         # 2. Classify the idea
@@ -55,25 +67,12 @@ class IdeaProcessor:
         idea_data.update(classification_result)
 
         # 3. Evaluate the idea
-        # These prompts would typically be loaded from a config or template file
-        system_prompt = "You are an expert evaluator for a hackathon."
-        user_prompt_template = """
-        Please evaluate the following idea based on the provided rubrics.
-        
-        {rubric_criteria}
-        
-        Idea Details:
-        Title: {idea_title}
-        Summary: {brief_summary}
-        Challenge/Opportunity: {challenge_opportunity}
-        Novelty/Benefits/Risks: {novelty_benefits_risks}
-        Primary Theme: {primary_theme}
-        Industry: {industry_name}
-        Technologies: {technologies_extracted}
-        
-        Extracted Content from Files:
-        {extracted_files_content}
-        """
+        # Load prompts from files
+        prompts_dir = Path(__file__).parent.parent / "prompts"
+        with open(prompts_dir / "evaluation_system_prompt.txt", "r") as f:
+            system_prompt = f.read()
+        with open(prompts_dir / "evaluation_user_prompt.txt", "r") as f:
+            user_prompt_template = f.read()
         
         evaluation_result = self.evaluator.evaluate_idea(
             idea_data=idea_data,
@@ -82,5 +81,9 @@ class IdeaProcessor:
             rubrics=self.rubrics
         )
         idea_data['evaluation'] = evaluation_result
+
+        # 4. Verify the evaluation
+        verification_result = self.verifier.verify_evaluation(evaluation_result)
+        idea_data['verification'] = verification_result
 
         return idea_data

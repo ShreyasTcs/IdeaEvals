@@ -1,0 +1,13 @@
+Analyze this image and extract:
+            1. Main content and purpose
+            2. Text content (OCR)
+            3. UI elements, diagrams, or technical visuals
+            4. Code, architecture, or implementation details
+
+            Is this a prototype/demo or just a concept slide?
+
+            Return JSON:
+            {{
+            "content": "Detailed description",
+            "content_type": "Prototype" or "Text"
+            }}

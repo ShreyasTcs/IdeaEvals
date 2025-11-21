@@ -4,31 +4,9 @@ import re
 from typing import Dict
 from llm.llm_provider import LLMProvider
 
-logger = logging.getLogger(__name__)
+from pathlib import Path
 
-RESPONSE_FORMAT_INSTRUCTION = """
-YOUR RESPONSE MUST BE A SINGLE JSON OBJECT.
-The JSON object must have the following structure:
-{
-    "scores": {
-        "novelty_and_innovation": {
-            "score": <int, 1-10>,
-            "justification": "<string>"
-        },
-        "business_potential_and_impact": {
-            "score": <int, 1-10>,
-            "justification": "<string>"
-        },
-        // ... other rubric criteria ...
-    },
-    "weighted_total": <float>,
-    "investment_recommendation": "<string, one of: 'strong-yes', 'consider-with-mitigations', 'no-go'>",
-    "key_strengths": ["<string>", ...],
-    "key_concerns": ["<string>", ...]
-}
-Ensure all scores are integers between 1 and 10.
-The "weighted_total" will be recalculated by the system, so focus on accurate individual scores.
-"""
+logger = logging.getLogger(__name__)
 
 class IdeaEvaluator:
     """Evaluates ideas using dynamic rubrics"""
@@ -45,29 +23,54 @@ class IdeaEvaluator:
     ) -> Dict:
         """Evaluate idea using dynamic rubrics"""
         
-        system_prompt = f"{base_system_prompt}\n\n{RESPONSE_FORMAT_INSTRUCTION}\n\nYOUR ONLY RESPONSE MUST BE THE JSON OBJECT. DO NOT INCLUDE ANY OTHER TEXT, EXPLANATIONS, OR MARKDOWN OUTSIDE THE JSON."
-        
-        # Adding rubric weights and criteria
-        rubric_criteria = "RUBRICS AND WEIGHTS (score each criterion 1-10, then use exact weights below):\n"
-        for criterion, weight in rubrics.items():
-            rubric_criteria += f"- {criterion.replace('_', ' ').title()}: Weight = {weight} ({weight * 100:.1f}%)\n"
-        
-        # Add rubric_criteria to the system prompt
-        system_prompt += f"\n{rubric_criteria}"
+        prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+        with open(prompts_dir / "scoring_guidelines.txt", "r") as f:
+            scoring_rubric = f.read()
+
+        # Prepare data for the prompt
+        full_content = f"""
+        Summary: {idea_data.get('brief_summary', '')}
+        Challenge/Opportunity: {idea_data.get('challenge_opportunity', '')}
+        Novelty/Benefits/Risks: {idea_data.get('novelty_benefits_risks', '')}
+        Responsible AI: {idea_data.get('responsible_ai', '')}
+        """
+
+        prompt_data = {
+            "scoring_rubric": scoring_rubric,
+            "category_context": "",  # This can be developed further if needed
+            "idea_title": idea_data.get('idea_title', ''),
+            "idea_description": idea_data.get('brief_summary', ''),
+            "idea_category": idea_data.get('primary_theme', 'N/A'),
+            "tags_str": ", ".join(idea_data.get('technologies_extracted', [])),
+            "full_content": full_content,
+            "supporting_materials": idea_data.get('extracted_files_content', 'N/A')
+        }
+
+        # Create the user prompt
+        user_prompt = user_prompt_template.format(**prompt_data)
+
+        # Combine system and user prompts
+        final_prompt = f"{base_system_prompt}\n\n{user_prompt}"
         
         # Log the prompt for debugging
-        logger.debug(f"System Prompt: {system_prompt}")
+        logger.debug(f"Final Prompt for LLM: {final_prompt}")
         
         # Get LLM response
-        response = self.llm_provider.generate_text(system_prompt)
+        response = self.llm_provider.generate_text(final_prompt)
         
         # Log the response for debugging
         logger.debug(f"LLM Response: {response}")
         
         # Parse and return the response as a dictionary
         try:
+            # Clean up markdown wrappers if LLM returns JSON inside ``` blocks
+            if response.startswith("```json"):
+                response = response.replace("```json", "").replace("```", "").strip()
+            elif response.startswith("```"):
+                response = response.replace("```", "").strip()
+            
             evaluation = json.loads(response)
             return evaluation
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON response from LLM: {e}")
-            return {"error": "Invalid JSON response from LLM"}
+            logger.error(f"Error decoding JSON response from LLM: {e}\nResponse was: {response}")
+            return {"error": "Invalid JSON response from LLM", "raw_response": response}

@@ -1,0 +1,43 @@
+SCORING GUIDELINES (per criterion, 1–10):
+General anchors: 9–10 Outstanding; 7–8 Strong; 5–6 Fair; 3–4 Weak; 1–2 Poor.
+
+Novelty / Market Need:
+  9–10: World-first or category-creating with clear client impact.
+  7–8: Industry-first in sector/region or step-change over status quo.
+  5–6: TCS-first or materially ahead of current TCS/partner offerings.
+  4:   Unit/BG-first; mostly incremental within a BU/context.
+  1–3: Derivative; no meaningful gap identified.
+
+Solution Clarity & Targeting:
+  9/10: Clearly articulated; unambiguous scope & personas; strong narrative.
+  7/8:  Clear but can be refined (minor ambiguities).
+  5/6:  Satisfactory; key elements present but uneven.
+  3/4:  Unclear/contradictory; material gaps.
+  1/2:  Incoherent or missing fundamentals.
+
+Implementation Feasibility:
+  9–10: Architecture, data flows, dependencies explicit; risks mitigated; realistic resourcing/timeline.
+  7–8:  Solid plan with minor gaps; risks manageable.
+  5–6:  Plausible but significant unknowns or missing milestones/owners.
+  3–4:  High technical/integration risk; weak resourcing.
+  1–2:  Unrealistic with current tech/constraints.
+
+Long-Term Value & Sustenance:
+  9–10: Strong economics & defensibility (IP/data/network); clear GTM; scalable; trend-aligned.
+  7–8:  Good path to scale with a few open questions.
+  5–6:  Some value but uncertain durability/expansion path.
+  3–4:  Narrow/one-off; limited reuse; weak economics.
+  1–2:  Low or negative long-term value.
+
+Security & Compliance:
+  9–10: Privacy-by-design; concrete controls (IAM, least privilege, KMS, logging, DLP); regs mapped; AI misuse safeguards.
+  7–8:  Most controls addressed with minor gaps.
+  5–6:  Partial coverage; risks noted but not mitigated.
+  3–4:  Material gaps (residency/retention/access).
+  1–2:  Non-compliant or high-risk by design.
+
+Evidence & Documentation:
+  9–10: Compelling evidence (prototype) and thorough docs.
+  7–8:  wireframes.
+  5–6:  Light evidence (more documentation).
+  1–4:  Poor documentation or No evidence or documentation.

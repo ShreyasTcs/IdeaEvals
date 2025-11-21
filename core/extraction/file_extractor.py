@@ -1,24 +1,22 @@
 import logging
 from pathlib import Path
 from typing import Dict, Optional
-import platform
-import subprocess
-import tempfile
 import json
 import os
-import logging
 import base64
 import pymupdf as fitz
-from pathlib import Path
-from typing import Dict
-import cv2
 from openai import AzureOpenAI
+from docx import Document 
 from PIL import Image
 import io
 from config.config import VIDEO_FRAME_EXTRACTION_INTERVAL_SECONDS
-from pptx import Presentation
-from docx import Document
-import cv2
+from utils.file_utils import (
+    extract_frames,
+    prepare_frames_for_api,
+    extract_text_from_pptx,
+    extract_text_from_docx,
+    extract_info_from_video,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,7 +60,7 @@ class VideoAnalyzer:
         logger.info(f"Analyzing video: {video_path.name}")
         
         # Step 1: Extract frames
-        frames = self._extract_frames(video_path, interval_seconds)
+        frames = extract_frames(video_path, interval_seconds)
         
         if not frames:
             return {
@@ -74,7 +72,7 @@ class VideoAnalyzer:
         
         # Step 2: Limit and compress frames
         frames_to_use = frames[:10]  # Max 10 frames for API
-        frame_messages = self._prepare_frames_for_api(frames_to_use)
+        frame_messages = prepare_frames_for_api(frames_to_use)
         
         if not frame_messages:
             return {
@@ -85,111 +83,17 @@ class VideoAnalyzer:
         # Step 3: Send to Azure OpenAI Vision
         return self._analyze_with_vision(frame_messages, video_path.name)
     
-    def _extract_frames(self, video_path: Path, interval_seconds: int) -> list:
-        """Extract frames from video at regular intervals"""
-        frames = []
-        
-        try:
-            cap = cv2.VideoCapture(str(video_path))
-            
-            if not cap.isOpened():
-                logger.error(f"Could not open video: {video_path}")
-                return frames
-            
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / fps if fps > 0 else 0
-            
-            logger.info(f"Video info: {duration:.1f}s, {fps:.1f} FPS, {total_frames} frames")
-            
-            frame_interval = int(fps * VIDEO_FRAME_EXTRACTION_INTERVAL_SECONDS)
-            frame_count = 0
-            extracted_count = 0
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                if frame_count % frame_interval == 0:
-                    # Encode frame as JPEG
-                    success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    if success:
-                        frames.append(buffer.tobytes())
-                        extracted_count += 1
-                        timestamp = frame_count / fps
-                        logger.info(f"Frame {extracted_count} @ {timestamp:.1f}s")
-                
-                frame_count += 1
-            
-            cap.release()
-            logger.info(f"✓ Total frames extracted: {len(frames)}")
-            
-        except Exception as e:
-            logger.error(f"Frame extraction failed: {e}")
-        
-        return frames
-    
-    def _prepare_frames_for_api(self, frames: list) -> list:
-        """Compress frames and convert to base64 for API"""
-        frame_messages = []
-        
-        for i, frame_data in enumerate(frames):
-            try:
-                # Load image
-                img = Image.open(io.BytesIO(frame_data))
-                
-                # Resize to reduce API payload size
-                img.thumbnail((512, 512), Image.Resampling.LANCZOS)
-                
-                # Convert to JPEG with compression
-                buffer = io.BytesIO()
-                img.save(buffer, format='JPEG', quality=75)
-                compressed_data = buffer.getvalue()
-                
-                # Encode to base64
-                base64_frame = base64.b64encode(compressed_data).decode('utf-8')
-                data_uri = f"data:image/jpeg;base64,{base64_frame}"
-                
-                frame_messages.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": data_uri,
-                        "detail": "low"
-                    }
-                })
-                
-                logger.info(f"Prepared frame {i+1}: {len(compressed_data)} bytes")
-                
-            except Exception as e:
-                logger.warning(f"Failed to prepare frame {i+1}: {e}")
-                continue
-        
-        return frame_messages
-    
     def _analyze_with_vision(self, frame_messages: list, video_name: str) -> Dict[str, str]:
         """Send frames to Azure OpenAI Vision for analysis"""
         
-        prompt = f"""Analyze this video by examining {len(frame_messages)} frames extracted at regular intervals.
-
-                    Video: {video_name}
-
-                    Provide a comprehensive summary including:
-                    1. **Main Topic/Purpose**: What is this video about?
-                    2. **Key Points**: What are the main points shown across the frames?
-                    3. **Visual Elements**: What UI, screens, diagrams, or demonstrations are shown?
-                    4. **Technical Details**: Any technology, code, systems, or implementation shown?
-                    5. **Workflow/Process**: What process or workflow is demonstrated?
-
-                    Classification:
-                    - **Prototype**: Shows working UI/demo, technical implementation, code, system architecture, working application
-                    - **Text**: Only concepts, slides, presentations with no technical demonstration
-
-                    Return ONLY valid JSON:
-                    {{
-                    "content": "Comprehensive detailed summary covering all 5 points above",
-                    "content_type": "Prototype" or "Text"
-                    }}"""
+        prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+        with open(prompts_dir / "video_analysis_prompt.txt", "r") as f:
+            prompt_template = f.read()
+        
+        prompt = prompt_template.format(
+            len_frame_messages=len(frame_messages),
+            video_name=video_name
+        )
                             
         try:
             logger = logging.getLogger(__name__)
@@ -298,19 +202,9 @@ class FileExtractor:
             ext = file_path.suffix.lower()
             mime_type = f"image/{'jpeg' if ext == '.jpg' else ext.strip('.')}"
 
-            prompt = f"""Analyze this image and extract:
-            1. Main content and purpose
-            2. Text content (OCR)
-            3. UI elements, diagrams, or technical visuals
-            4. Code, architecture, or implementation details
-
-            Is this a prototype/demo or just a concept slide?
-
-            Return JSON:
-            {{
-            "content": "Detailed description",
-            "content_type": "Prototype" or "Text"
-            }}"""
+            prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+            with open(prompts_dir / "image_analysis_prompt.txt", "r") as f:
+                prompt = f.read()
             
             response = self.vision_client.chat.completions.create(
                 model=self.deployment,
@@ -426,20 +320,11 @@ class FileExtractor:
             
             content = "\n".join(full_text)
             
-            prompt = f"""Analyze this Word document content:
-
-                        {content[:4000]}  # Truncate to avoid token limits
-
-                        Determine:
-                        1. Main topic and purpose
-                        2. Technical content, code, or implementation details
-                        3. Is this a concept document or does it describe a working prototype?
-
-                        Return JSON:
-                        {{
-                        "content": "Detailed analysis",
-                        "content_type": "Prototype" or "Text"
-                        }}"""
+            prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+            with open(prompts_dir / "document_analysis_prompt.txt", "r") as f:
+                prompt_template = f.read()
+            
+            prompt = prompt_template.format(content=content[:4000])
             
             response = self.vision_client.chat.completions.create(
                 model=self.deployment,
@@ -553,19 +438,15 @@ class FileExtractor:
     def _analyze_with_vision_api(self, frame_messages: list, file_name: str, doc_type: str = "document") -> Dict[str, str]:
         """Generic method to analyze images with Vision API"""
         
-        prompt = f"""Analyze this {doc_type}: {file_name}
-
-                    You have {len(frame_messages)} pages/slides/frames. Extract:
-                    1. Main content and purpose
-                    2. Technical details, code, implementation
-                    3. Visual elements, UI, diagrams
-                    4. Overall classification: Prototype or Text
-
-                    Return JSON:
-                    {{
-                    "content": "Comprehensive analysis",
-                    "content_type": "Prototype" or "Text"
-                    }}"""
+        prompts_dir = Path(__file__).parent.parent.parent / "prompts"
+        with open(prompts_dir / "generic_analysis_prompt.txt", "r") as f:
+            prompt_template = f.read()
+            
+        prompt = prompt_template.format(
+            doc_type=doc_type,
+            file_name=file_name,
+            len_frame_messages=len(frame_messages)
+        )
         
         try:
             response = self.vision_client.chat.completions.create(
@@ -614,16 +495,16 @@ class FileExtractor:
                     return {"content": f"PDF file: {file_path.name}", "content_type": "Text"}
             
             elif file_type == '.pptx':
-                return {"content": self._extract_text_from_pptx(file_path), "content_type": "Text"}
+                return {"content": extract_text_from_pptx(file_path), "content_type": "Text"}
             
             elif file_type == '.docx':
-                return {"content": self._extract_text_from_docx(file_path), "content_type": "Text"}
+                return {"content": extract_text_from_docx(file_path), "content_type": "Text"}
             
             elif file_type in ['.jpg', '.jpeg', '.png']:
                 return {"content": f"Image file: {file_path.name}", "content_type": "Text"}
             
             elif file_type in ['.mp4', '.mov', '.avi']:
-                return {"content": self._extract_info_from_video(file_path), "content_type": "Text"}
+                return {"content": extract_info_from_video(file_path), "content_type": "Text"}
             
             else:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -632,46 +513,4 @@ class FileExtractor:
         except Exception as e:
             logger.error(f"Traditional extraction failed for {file_path.name}: {e}")
             return {"content": f"Error extracting {file_path.name}", "content_type": "Text"}
-    
-    def _extract_text_from_pptx(self, file_path: Path) -> str:
-        """Extracts text from a PPTX file."""
-        try:
-            prs = Presentation(file_path)
-            text_runs = []
-            for slide in prs.slides:
-                for shape in slide.shapes:
-                    if hasattr(shape, "text"):
-                        text_runs.append(shape.text)
-            return "\n".join(text_runs)
-        except Exception as e:
-            logger.error(f"Error reading PPTX file {file_path}: {e}")
-            return f"Could not extract text from {file_path.name}."
-    
-    def _extract_text_from_docx(self, file_path: Path) -> str:
-        """Extracts text from a DOCX file."""
-        try:
-            doc = Document(file_path)
-            return "\n".join([p.text for p in doc.paragraphs])
-        except Exception as e:
-            logger.error(f"Error reading DOCX file {file_path}: {e}")
-            return f"Could not extract text from {file_path.name}."
-    
-    def _extract_info_from_video(self, file_path: Path) -> str:
-        """Extracts basic information from a video file."""
-        try:
-            import cv2
-            cap = cv2.VideoCapture(str(file_path))
-            if not cap.isOpened():
-                raise IOError("Could not open video file.")
-            
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = frame_count / fps if fps > 0 else 0
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            cap.release()
-            return f"Video file: {file_path.name}. Duration: {duration:.2f}s, Resolution: {width}x{height}"
-        except Exception as e:
-            logger.error(f"Error processing video file {file_path}: {e}")
-            return f"Error processing video file {file_path.name}."
+
