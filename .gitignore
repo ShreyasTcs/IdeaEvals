@@ -118,3 +118,6 @@ build/
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+v1/
+v2(needToChangeOutFormat)/

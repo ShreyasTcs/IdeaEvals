@@ -1,14 +1,34 @@
-"""
-Idea Evaluator - Uses dynamic rubrics
-"""
-
 import json
 import logging
+import re
 from typing import Dict
 from llm.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
+RESPONSE_FORMAT_INSTRUCTION = """
+YOUR RESPONSE MUST BE A SINGLE JSON OBJECT.
+The JSON object must have the following structure:
+{
+    "scores": {
+        "novelty_and_innovation": {
+            "score": <int, 1-10>,
+            "justification": "<string>"
+        },
+        "business_potential_and_impact": {
+            "score": <int, 1-10>,
+            "justification": "<string>"
+        },
+        // ... other rubric criteria ...
+    },
+    "weighted_total": <float>,
+    "investment_recommendation": "<string, one of: 'strong-yes', 'consider-with-mitigations', 'no-go'>",
+    "key_strengths": ["<string>", ...],
+    "key_concerns": ["<string>", ...]
+}
+Ensure all scores are integers between 1 and 10.
+The "weighted_total" will be recalculated by the system, so focus on accurate individual scores.
+"""
 
 class IdeaEvaluator:
     """Evaluates ideas using dynamic rubrics"""
@@ -19,95 +39,35 @@ class IdeaEvaluator:
     def evaluate_idea(
         self,
         idea_data: Dict,
-        system_prompt: str,
+        base_system_prompt: str,
         user_prompt_template: str,
         rubrics: Dict[str, float]
     ) -> Dict:
         """Evaluate idea using dynamic rubrics"""
         
-        # Build rubric criteria text with weights
-        rubric_criteria = "RUBRICS AND WEIGHTS (score each criterion 1–10, then use exact weights below):\n"
+        system_prompt = f"{base_system_prompt}\n\n{RESPONSE_FORMAT_INSTRUCTION}\n\nYOUR ONLY RESPONSE MUST BE THE JSON OBJECT. DO NOT INCLUDE ANY OTHER TEXT, EXPLANATIONS, OR MARKDOWN OUTSIDE THE JSON."
+        
+        # Adding rubric weights and criteria
+        rubric_criteria = "RUBRICS AND WEIGHTS (score each criterion 1-10, then use exact weights below):\n"
         for criterion, weight in rubrics.items():
             rubric_criteria += f"- {criterion.replace('_', ' ').title()}: Weight = {weight} ({weight * 100:.1f}%)\n"
         
-        rubric_criteria += "\nIMPORTANT – WEIGHTED TOTAL CALCULATION:\n"
-        rubric_criteria += "weighted_total = "
-        rubric_criteria += " + ".join([f"({weight} × {criterion}_score)" for criterion, weight in rubrics.items()])
-        rubric_criteria += "\nExample: If novelty=8, clarity=7, feasibility=6, etc., calculate the exact weighted sum."
+        # Add rubric_criteria to the system prompt
+        system_prompt += f"\n{rubric_criteria}"
         
-        # Format user prompt
-        user_prompt = user_prompt_template.format(
-            rubric_criteria=rubric_criteria,
-            idea_title=idea_data.get('idea_title', '')[:500],
-            brief_summary=idea_data.get('brief_summary', '')[:2000],
-            challenge_opportunity=idea_data.get('challenge_opportunity', '')[:2000],
-            novelty_benefits_risks=idea_data.get('novelty_benefits_risks', '')[:2000],
-            primary_theme=idea_data.get('primary_theme', 'Not classified'),
-            industry_name=idea_data.get('industry_name', 'Not classified'),
-            technologies_extracted=str(idea_data.get('technologies_extracted', []))[:500],
-            extracted_files_content=idea_data.get('extracted_files_content', '')[:5000]
-        )
+        # Log the prompt for debugging
+        logger.debug(f"System Prompt: {system_prompt}")
         
-        combined_prompt = f"{system_prompt}\n\n{user_prompt}"
+        # Get LLM response
+        response = self.llm_provider.generate_text(system_prompt)
         
-        # Call LLM
-        response_text = self.llm_provider.generate_text(combined_prompt).strip()
+        # Log the response for debugging
+        logger.debug(f"LLM Response: {response}")
         
-        # Clean markdown code block wrappers (if present)
-        if response_text.startswith("```json"):
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text.replace("```", "").strip()
-        
-        logger.info(f"Raw LLM response (first 500 chars): {response_text[:500]}")
-        
-        # Parse JSON safely
+        # Parse and return the response as a dictionary
         try:
-            result = json.loads(response_text)
+            evaluation = json.loads(response)
+            return evaluation
         except json.JSONDecodeError as e:
-            logger.error(f"❌ Failed to parse JSON: {e}")
-            logger.error(f"Response was: {response_text}")
-            
-            # Fallback default structure if parsing fails
-            result = {
-                "scores": {
-                    criterion: {
-                        "score": 5,
-                        "justification": "Parsing failed",
-                        "insufficient_info": True
-                    } for criterion in rubrics.keys()
-                },
-                "weighted_total": 0.0,
-                "investment_recommendation": "consider-with-mitigations",
-                "key_strengths": [],
-                "key_concerns": ["Evaluation parsing failed"]
-            }
-        
-        # ✅ Recalculate weighted_total to ensure accuracy
-        calculated_total = 0.0
-        
-        # Handle both possible JSON structures
-        if "scores" in result:
-            # Example structure: {"scores": {"novelty": {"score": 8, ...}, ...}}
-            for criterion, weight in rubrics.items():
-                score_entry = result["scores"].get(criterion, {})
-                if isinstance(score_entry, dict) and "score" in score_entry:
-                    try:
-                        calculated_total += weight * float(score_entry["score"])
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid score type for {criterion}: {score_entry}")
-        else:
-            # Alternative structure: {"novelty": {"score": 8, ...}, ...}
-            for criterion, weight in rubrics.items():
-                score_entry = result.get(criterion, {})
-                if isinstance(score_entry, dict) and "score" in score_entry:
-                    try:
-                        calculated_total += weight * float(score_entry["score"])
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid score type for {criterion}: {score_entry}")
-        
-        # Set final weighted total
-        result["weighted_total"] = round(calculated_total, 2)
-        logger.info(f"✅ Calcucllated weighted_total: {result['weighted_total']}")
-        
-        return result
+            logger.error(f"Error decoding JSON response from LLM: {e}")
+            return {"error": "Invalid JSON response from LLM"}

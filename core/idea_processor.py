@@ -1,5 +1,8 @@
 from typing import Dict, Any
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 from llm.llm_provider import LLMProvider
 from core.classification.tcs_classifier import TCSClassifier
@@ -35,6 +38,7 @@ class IdeaProcessor:
                         all_files_content.append(f"--- START OF FILE: {file_path.name} ---\n{extraction_result['text']}\n--- END OF FILE: {file_path.name} ---\n")
 
         idea_data['extracted_files_content'] = "\n".join(all_files_content)
+        logger.debug(f"Extracted content for idea {idea_id}: {idea_data['extracted_files_content'][:1000]}...")
 
         # 2. Classify the idea
         # Create a combined text for classification
@@ -73,7 +77,7 @@ class IdeaProcessor:
         
         evaluation_result = self.evaluator.evaluate_idea(
             idea_data=idea_data,
-            system_prompt=system_prompt,
+            base_system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             rubrics=self.rubrics
         )

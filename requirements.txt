@@ -5,14 +5,16 @@ psycopg2-binary>=2.9.0
 
 # Google Gemini
 google-generativeai>=0.3.0
+azure-ai-documentintelligence
 
 # File processing
 python-pptx>=0.6.21
 python-docx>=1.0.0
 reportlab>=4.0.0
 Pillow>=10.0.0
-opencv-python>=4.8.0
-PyMuPDF==1.23.8
+opencv-python-headless==4.8.0.74
+PyMuPDF>=1.24.0
+pdf2image
 
 # Pipeline
 tqdm>=4.66.0

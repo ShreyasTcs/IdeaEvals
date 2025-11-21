@@ -28,13 +28,9 @@ This file tracks the progress of refactoring the backend to be modular and indep
 
 # New Tasks (November 19, 2025)
 
-- [ ] **Task 6: Fix Video File Parsing**
-  - [ ] Investigate `core/extraction/file_extractor.py` and `core/extraction/content_processor.py` to understand why video files are not being parsed.
-  - [ ] Implement or integrate a solution for extracting content from video files (e.g., transcribing audio, extracting keyframes/metadata).
-
-- [ ] **Task 7: Fix Evaluation Failure**
-  - [ ] Debug `core/evaluation/idea_evaluator.py` to identify why evaluation scores are consistently "Parsing failed".
-  - [ ] Verify interaction with `llm/llm_provider.py` and `config/rubrics.json` to ensure correct data flow and parsing of LLM responses.
-
-- [ ] **Task 8: Implement Multithreading for Parallel Idea Processing**
-  - [ ] Modify `run_pipeline.py` or `core/idea_processor.py` to process at least 8 ideas concurrently using multithreading to improve performance.
+- [x] **Task 8: Implement Multithreading for Parallel Idea Processing**
+  - [x] Modify `run_pipeline.py` or `core/idea_processor.py` to process at least 8 ideas concurrently using multithreading to improve performance.
+  - [x] Make the terminal clean while running only providing essential things like progress etc while the debugging and logging of every step to be in pipeline.log so that any errors or mistakes can be checked.
+  - [ ] Also make verification a step in the pipeline after evaluation and also change the code inside the verification folder in core folder as needed but do not change the core logic of verification.
+  - [ ] Process a list of ideas, load the schema from schema.json, check each required field, set missing fields to NAN, log debug statements for missing fields, and save the evaluated results in evaluation_results.json ensuring the output matches the schema structure, with all fields present (either with valid data or NAN for missing ones).
+  

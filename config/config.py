@@ -30,6 +30,7 @@ TIMEOUT_SECONDS = 120
 # File settings
 SUPPORTED_EXTENSIONS = ['.pdf', '.pptx', '.docx', '.mp4', '.mov', '.jpg', '.jpeg', '.png', '.webp']
 MAX_FILE_SIZE_MB = 50
+VIDEO_FRAME_EXTRACTION_INTERVAL_SECONDS = 10 # Extract a frame every 10 seconds
 
 # Logging
 LOG_LEVEL = "INFO"

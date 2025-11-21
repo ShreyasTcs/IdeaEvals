@@ -78,11 +78,17 @@ class ContentProcessor:
     
     def _find_files(self, directory: Path) -> List[Path]:
         """Find all supported files"""
-        supported_extensions = {'.pdf', '.pptx', '.docx', '.mp4', '.mov', '.jpg', '.jpeg', '.png', '.webp'}
+        logger.debug(f"Searching for supported files in: {directory}")
+        supported_extensions = {'.pdf', '.pptx', '.docx', '.mp4', '.mov', '.avi', '.jpg', '.jpeg', '.png', '.webp'}
         files = []
         
         for file in directory.iterdir():
+            logger.debug(f"Found file: {file.name}, suffix: {file.suffix.lower()}")
             if file.is_file() and file.suffix.lower() in supported_extensions:
                 files.append(file)
+                logger.debug(f"Added supported file: {file.name}")
+            else:
+                logger.debug(f"Skipped unsupported file: {file.name}")
         
+        logger.info(f"Found {len(files)} supported files in {directory}")
         return sorted(files)
