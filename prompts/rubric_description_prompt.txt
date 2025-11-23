@@ -1,0 +1,5 @@
+You are an expert in hackathon idea evaluation and rubric design. Your task is to generate a concise and clear description for a rubric category. The description should be 1-2 sentences long and highlight the key aspects to consider when evaluating an idea against this rubric. Ensure the language is professional and directly relevant to evaluating innovative ideas.
+
+Rubric Category: {rubric_name}
+
+Generate the description:

@@ -1,18 +1,4 @@
-EXPERT EVALUATION CRITERIA & QUESTIONS (weights in parentheses):
-1) NOVELTY (15%)
-   - Problem significance; differentiation vs alternatives; market gap; category creation/disruption.
-2) CLARITY (20%)
-   - What/how/for whom; personas & buyers; value prop; differentiators; domain understanding.
-3) FEASIBILITY (20%)
-   - Technical approach credibility; integration complexity; resources & timeline; risks & mitigations; regulatory constraints.
-4) LONG_TERM_VALUE (20%)
-   - Business model; GTM; scalability; defensibility/switching costs; TAM expansion; enterprise trend alignment.
-5) SECURITY_COMPLIANCE (15%)
-   - Data handling (PII/PHI); authN/authZ; encryption (in transit/at rest); key mgmt; audit logging; AI misuse safeguards; regulatory mapping (GDPR, HIPAA, PCI DSS, ISO 27001, SOC 2).
-6) EVIDENCE (10%)
-   - PoC/demo; benchmarks/metrics; user feedback; references; professional completeness.
-
-SCORING SCALE ANCHORS (1–10): 9–10 Outstanding | 7–8 Strong | 5–6 Fair | 3–4 Weak | 1–2 Poor
+{rubrics}
 
 [Scoring guidelines follow below]
 
@@ -25,15 +11,17 @@ IDEA TO EVALUATE
 Title: {idea_title}
 Description: {idea_description}
 Category: {idea_category}
+Content Type: {content_type}
 Tags: {tags_str}
 Full Content: {full_content}
 Supporting Materials: {supporting_materials}
 
 RESPONSE FORMAT & RULES
 - Return ONLY a JSON object conforming to the provided schema (no markdown/code fences).
-- For each criterion, include: score (1–10), a 2–4 sentence justification, and insufficient_info (true/false).
-- Compute weighted_total using: WT = 0.15*n + 0.20*c + 0.20*f + 0.20*l + 0.15*s + 0.10*e (scores 1–10). Round to one decimal (half-up).
+- For each criterion defined in the rubrics, include: score (1–10), a 2–4 sentence justification, and insufficient_info (true/false).
+- IMPORTANT: If the "Content Type" is "Prototype", add a bonus of 2 points to the final `weighted_total` score after calculating it based on the rubric weights.
+- Compute `weighted_total` based on the weights specified in the rubrics. Round to one decimal (half-up).
 - investment_recommendation: one of [go, consider-with-mitigations, no-go].
 - Provide 2–3 key_strengths and 2–3 key_concerns (short, specific).
 - Optionally add up to 3 assumptions and any relevant flags [compliance_risk, novelty_unclear, integration_complexity, data_gaps, ethical_risk].
-- Set schema_version = "tcs-ideathon.v2" and echo rubric_weights = {{"novelty": 0.15, "clarity": 0.20, "feasibility": 0.20, "long_term_value": 0.20, "security_compliance": 0.15, "evidence": 0.10}}.
+- Set schema_version = "tcs-ideathon.v2" and echo the `rubric_weights` used for the calculation.

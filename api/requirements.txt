@@ -1,0 +1,4 @@
+Flask
+Flask-Cors
+pandas
+openpyxl # For reading .xlsx files with pandas

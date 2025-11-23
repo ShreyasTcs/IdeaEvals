@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
 import logging
 
@@ -16,7 +16,7 @@ class IdeaProcessor:
     classification, and evaluation.
     """
 
-    def __init__(self, llm_provider: LLMProvider, rubrics: Dict[str, float]):
+    def __init__(self, llm_provider: LLMProvider, rubrics: List[Dict[str, Any]]):
         self.llm_provider = llm_provider
         self.rubrics = rubrics
         self.classifier = TCSClassifier(llm_provider)
@@ -32,17 +32,25 @@ class IdeaProcessor:
         idea_id = idea_data.get("idea_id")
         all_files_content = []
         content_types = []
+        additional_file_types = []
         if idea_id:
             idea_dir = additional_files_dir / str(idea_id)
             if idea_dir.is_dir():
                 for file_path in idea_dir.iterdir():
                     if file_path.is_file():
+                        # Store file type
+                        file_ext = file_path.suffix.lower().replace('.', '')
+                        if file_ext:
+                            additional_file_types.append(file_ext)
+                        
+                        # Extract content
                         extraction_result = self.extractor.extract_content(file_path)
                         all_files_content.append(f"--- START OF FILE: {file_path.name} ---\n{extraction_result['text']}\n--- END OF FILE: {file_path.name} ---\n")
                         if 'content_type' in extraction_result:
                             content_types.append(extraction_result['content_type'])
 
         idea_data['extracted_files_content'] = "\n".join(all_files_content)
+        idea_data['additional_file_types'] = sorted(list(set(additional_file_types))) # Store unique, sorted list
         
         # Determine overall content type
         overall_content_type = "Text"

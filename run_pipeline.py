@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import argparse
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,18 +53,35 @@ def main():
     print("🎯 MODULAR HACKATHON EVALUATION PIPELINE")
     print("="*80 + "\n")
 
+    parser = argparse.ArgumentParser(description="Modular Hackathon Evaluation Pipeline")
+    parser.add_argument('--ideas_filepath', type=Path, required=True, help="Path to the ideas XLSX file.")
+    parser.add_argument('--rubrics_filepath', type=Path, required=True, help="Path to the rubrics JSON file.")
+    parser.add_argument('--output_filepath', type=Path, required=True, help="Path to the output JSON file.")
+    args = parser.parse_args()
+
     # --- Configuration and Initialization ---
-    ideas_filepath = DATA_DIR / "ideas.xlsx"
-    rubrics_filepath = Path(__file__).parent / "config" / "rubrics.json"
-    output_filepath = DATA_DIR / "evaluation_results.json"
+    # Use paths from arguments
+    ideas_filepath = args.ideas_filepath
+    rubrics_filepath = args.rubrics_filepath
+    output_filepath = args.output_filepath
 
     if not GEMINI_API_KEY:
         logger.error("❌ GEMINI_API_KEY not found in config. Please set it.")
-        return 1
+        # return 1 # Allow pipeline to proceed with Azure OpenAI if Gemini is not configured
 
     # 1. Initialize LLM Provider
-    # llm_provider = GeminiProvider(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
-    llm_provider = AzureOpenAIProvider()
+    # Prioritize AzureOpenAIProvider if configured, otherwise fallback to GeminiProvider
+    try:
+        llm_provider = AzureOpenAIProvider()
+        logger.info("Using AzureOpenAIProvider.")
+    except ValueError as e:
+        logger.warning(f"Azure OpenAI not fully configured: {e}. Attempting to use GeminiProvider.")
+        if GEMINI_API_KEY:
+            llm_provider = GeminiProvider(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
+            logger.info("Using GeminiProvider.")
+        else:
+            logger.error("❌ No LLM provider is configured. Please set AZURE_OPENAI_API_KEY/ENDPOINT or GEMINI_API_KEY.")
+            return 1
 
     # 2. Initialize I/O Helpers
     input_helper = InputHelper(
@@ -88,7 +106,6 @@ def main():
 
     # --- Processing Loop ---
     print(f"⚙️  Processing {len(ideas)} ideas concurrently (up to 8 workers)...")
-    all_results = []
     
     # Function to wrap process_idea for concurrent execution and error handling
     def process_single_idea(idea):
@@ -129,15 +146,11 @@ def main():
             }
             result['llm_output'] = llm_output
             
-            all_results.append(result)
-            
             # Save results incrementally
-            output_helper.save_results(all_results)
+            output_helper.save_result_incrementally(result)
 
     # --- Final Save ---
-    print(f"\n💾 Finalizing results at {output_filepath}...")
-    output_helper.save_results(all_results)
-    print("✓ Results saved.\n")
+    print(f"\n💾 Results have been incrementally saved to {output_filepath}")
 
     print("✅ Pipeline completed successfully!")
     return 0
