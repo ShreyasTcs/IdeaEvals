@@ -1,5 +1,9 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Project paths
 BASE_DIR = Path(__file__).parent.parent
@@ -9,16 +13,16 @@ SCHEMA_FILE = BASE_DIR / "config" / "schema.json"
 
 # Database configuration
 DB_CONFIG = {
-    'host': 'localhost',
-    'database': 'postgres',
-    'user': 'postgres',
-    'password': 'harikv@007',  # Change this
-    'port': 5432
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'database': os.getenv('DB_DATABASE', 'postgres'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD'),
+    'port': int(os.getenv('DB_PORT', 5432))
 }
 
 # Gemini API
-GEMINI_API_KEY = "AIzaSyBG7cGklDEs-ta0fl_5FykWRgMwW1XVkv4"
-GEMINI_MODEL = "gemini-2.5-pro"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro-latest")
 
 # Processing settings
 BATCH_SIZE = 8  # Number of ideas to process in parallel (idea-level parallelism)

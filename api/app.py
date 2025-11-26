@@ -86,16 +86,8 @@ def parse_ideas_file(file_content: bytes, filename: str) -> list[dict]:
     return df.to_dict(orient='records')
 
 def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, rubrics, additional_files, ideas_file_base64, ideas_file_name):
-    logger.info(f"Starting evaluation task for ID: {evaluation_id}")
-    evaluations[evaluation_id] = {
-        'status': 'processing',
-        'total_ideas': 0,
-        'processed_ideas': 0,
-        'estimated_time_remaining': 'Calculating...', 
-        'results': None,
-        'error': None
-    }
-
+    logger.info(f"Starting evaluation task for ID: {evaluation_id})")
+    
     project_root = Path(__file__).parent.parent
     data_dir = project_root / "data"
     config_dir = project_root / "config"
@@ -105,9 +97,17 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
     data_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    ideas_filepath = data_dir / "ideas.xlsx" # This will be overwritten by the uploaded file
-    rubrics_filepath = config_dir / "rubrics.json" # This will be overwritten by the uploaded rubrics
-    output_filepath = data_dir / f"evaluation_results_{evaluation_id}.json" # Unique output file
+    ideas_filepath = data_dir / f"ideas_{evaluation_id}.xlsx"
+    rubrics_filepath = config_dir / f"rubrics_{evaluation_id}.json"
+    output_filepath = data_dir / f"evaluation_results_{evaluation_id}.json"
+    progress_filepath = data_dir / f"progress_{evaluation_id}.json"
+
+    evaluations[evaluation_id] = {
+        'status': 'pending',
+        'progress_filepath': str(progress_filepath),
+        'results': None,
+        'error': None
+    }
 
     try:
         # 1. Write ideas file
@@ -131,15 +131,18 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
             str(run_pipeline_script),
             '--ideas_filepath', str(ideas_filepath),
             '--rubrics_filepath', str(rubrics_filepath),
-            '--output_filepath', str(output_filepath)
+            '--output_filepath', str(output_filepath),
+            '--progress_filepath', str(progress_filepath),
+            '--hackathon_name', hackathon_name,
+            '--hackathon_description', hackathon_description
         ]
         process = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            encoding='utf-8', # Explicitly set encoding to UTF-8
-            check=True, # Raise an exception for non-zero exit codes
-            cwd=project_root # Run from project root to ensure paths are correct
+            encoding='utf-8',
+            check=True,
+            cwd=project_root
         )
         logger.info(f"Pipeline stdout:\n{process.stdout}")
         if process.stderr:
@@ -149,15 +152,12 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
         if not output_filepath.exists():
             raise FileNotFoundError(f"Pipeline did not generate expected output file: {output_filepath}")
         
-        with open(output_filepath, 'r') as f:
+        with open(output_filepath, 'r', encoding='utf-8') as f:
             results = json.load(f)
         logger.info(f"Results loaded from {output_filepath}")
 
         evaluations[evaluation_id]['status'] = 'completed'
         evaluations[evaluation_id]['results'] = results
-        evaluations[evaluation_id]['total_ideas'] = len(results)
-        evaluations[evaluation_id]['processed_ideas'] = len(results)
-        evaluations[evaluation_id]['estimated_time_remaining'] = '0m 0s'
         logger.info(f"Evaluation task {evaluation_id} completed successfully.")
 
     except FileNotFoundError as e:
@@ -177,12 +177,13 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
         evaluations[evaluation_id]['status'] = 'failed'
         evaluations[evaluation_id]['error'] = str(e)
     finally:
-        # Clean up temporary files (optional, but good practice)
+        # Clean up temporary files
         if ideas_filepath.exists():
-            # ideas_filepath.unlink() # Keep for debugging for now
-            pass
+            ideas_filepath.unlink()
         if rubrics_filepath.exists():
-            # rubrics_filepath.unlink() # Keep for debugging for now
+            rubrics_filepath.unlink()
+        if progress_filepath.exists():
+            # Keep progress file for a while for debugging, or unlink
             pass
 
 @app.route('/evaluate', methods=['POST'])
@@ -211,10 +212,30 @@ def get_evaluation_progress(evaluation_id):
     evaluation = evaluations.get(evaluation_id)
     if not evaluation:
         return jsonify({"message": "Evaluation not found"}), 404
+
+    progress_filepath = evaluation.get('progress_filepath')
+    if progress_filepath and Path(progress_filepath).exists():
+        try:
+            with open(progress_filepath, 'r', encoding='utf-8') as f:
+                progress_data = json.load(f)
+            
+            # Update the main status
+            if evaluation['status'] not in ['completed', 'failed']:
+                 evaluations[evaluation_id]['status'] = progress_data.get('status', evaluation['status'])
+
+            return jsonify(progress_data), 200
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not read or parse progress file {progress_filepath}: {e}")
+            # Fallback to in-memory data
     
-    # Return a copy to prevent external modification
-    progress_data = {k: v for k, v in evaluation.items() if k != 'results'}
-    return jsonify(progress_data), 200
+    # Fallback response if file doesn't exist or fails to load
+    return jsonify({
+        "total_ideas": 0,
+        "processed_ideas": 0,
+        "status": evaluation.get('status', 'pending'),
+        "estimated_time_remaining": "N/A",
+        "error": evaluation.get('error')
+    }), 200
 
 @app.route('/evaluation/results/<evaluation_id>', methods=['GET'])
 def get_evaluation_results(evaluation_id):

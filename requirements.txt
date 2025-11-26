@@ -19,3 +19,4 @@ pdf2image
 # Pipeline
 tqdm>=4.66.0
 tenacity>=8.2.0
+python-dotenv>=0.21.0
