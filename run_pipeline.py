@@ -65,10 +65,12 @@ def main():
     session_dir = DATA_DIR / session_dir_name
     session_dir.mkdir(parents=True, exist_ok=True)
     print(f"📂 Output Directory Created: {session_dir}")
-    
-    # We DO NOT overwrite args.output_filepath or args.progress_filepath here.
-    # The API expects them at the specific location it asked for.
-    # We will copy the final result to session_dir for archival later.
+
+    # Force output paths to be inside the session directory
+    # We take the filename from the provided argument and place it in the session dir
+    args.output_filepath = session_dir / args.output_filepath.name
+    if args.progress_filepath:
+        args.progress_filepath = session_dir / args.progress_filepath.name
     
     log_file_path = session_dir / "pipeline.log"
 
@@ -236,14 +238,6 @@ def main():
     print(f"\n💾 Results have been incrementally saved to {output_filepath}")
     update_progress(processed_ideas_count, total_ideas, 'completed', eta_seconds=0)
     
-    # Archive the result file
-    try:
-        archive_path = session_dir / output_filepath.name
-        shutil.copy2(output_filepath, archive_path)
-        print(f"📦 Result file archived to: {archive_path}")
-    except Exception as e:
-        logger.warning(f"Failed to archive result file: {e}")
-
     if hackathon_id:
         print(f"\n✓ All results stored in database for Hackathon ID: {hackathon_id}")
         # Optionally, generate the final JSON from the DB

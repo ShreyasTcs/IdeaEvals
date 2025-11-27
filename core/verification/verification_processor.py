@@ -30,25 +30,30 @@ class VerificationProcessor:
                 "checks_failed": 1
             }
         
+        # Create a working copy to handle potential nesting without mutating original
+        working_result = evaluation_result.copy()
+        if 'criteria' in working_result and isinstance(working_result['criteria'], dict):
+            working_result.update(working_result['criteria'])
+
         verification_report = {}
         self.passed = 0
         self.failed = 0
         self.warnings = []
 
         # 1. Verify rubric compliance
-        rubric_compliance = self._verify_rubric_compliance(evaluation_result)
+        rubric_compliance = self._verify_rubric_compliance(working_result)
         verification_report['rubric_compliance'] = rubric_compliance
 
         # 2. Verify JSON validity
-        json_validity = self._verify_json_validity(evaluation_result)
+        json_validity = self._verify_json_validity(working_result)
         verification_report['json_validity'] = json_validity
 
         # 3. Verify no hallucination
-        hallucination_check = self._verify_no_hallucination(evaluation_result)
+        hallucination_check = self._verify_no_hallucination(working_result)
         verification_report['hallucination_check'] = hallucination_check
 
         # 4. Verify weighted scores (original check, enhanced)
-        weighted_score_check = self._verify_weighted_scores(evaluation_result)
+        weighted_score_check = self._verify_weighted_scores(working_result)
         verification_report['weighted_score_verification'] = weighted_score_check
 
         # 5. Overall status

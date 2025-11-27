@@ -148,16 +148,34 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
         if process.stderr:
             logger.warning(f"Pipeline stderr:\n{process.stderr}")
 
+        # Parse stdout to find the actual output file path (dynamic folder)
+        actual_output_filepath = output_filepath
+        for line in process.stdout.splitlines():
+            if "Results have been incrementally saved to" in line:
+                try:
+                    # Extract path after "saved to "
+                    path_str = line.split("saved to ")[1].strip()
+                    actual_output_filepath = Path(path_str)
+                    logger.info(f"Detected dynamic output path: {actual_output_filepath}")
+                    break
+                except IndexError:
+                    logger.warning("Could not parse output path from log line.")
+
         # 4. Read results from the generated JSON file
-        if not output_filepath.exists():
-            raise FileNotFoundError(f"Pipeline did not generate expected output file: {output_filepath}")
+        if not actual_output_filepath.exists():
+            # Fallback check for the original path just in case
+            if output_filepath.exists():
+                actual_output_filepath = output_filepath
+            else:
+                raise FileNotFoundError(f"Pipeline did not generate expected output file at {actual_output_filepath} or {output_filepath}")
         
-        with open(output_filepath, 'r', encoding='utf-8') as f:
+        with open(actual_output_filepath, 'r', encoding='utf-8') as f:
             results = json.load(f)
-        logger.info(f"Results loaded from {output_filepath}")
+        logger.info(f"Results loaded from {actual_output_filepath}")
 
         evaluations[evaluation_id]['status'] = 'completed'
         evaluations[evaluation_id]['results'] = results
+        evaluations[evaluation_id]['output_file'] = str(actual_output_filepath) # Store for retrieval
         logger.info(f"Evaluation task {evaluation_id} completed successfully.")
 
     except FileNotFoundError as e:
@@ -247,9 +265,16 @@ def get_evaluation_results(evaluation_id):
         return jsonify({"message": "Evaluation not yet completed"}), 409 # 409 Conflict
     
     # Read results from the file
-    results_file_path = Path(__file__).parent.parent / "data" / f"evaluation_results_{evaluation_id}.json"
+    # First check if we have a stored dynamic path
+    stored_path = evaluation.get('output_file')
+    if stored_path:
+        results_file_path = Path(stored_path)
+    else:
+        # Fallback to default structure
+        results_file_path = Path(__file__).parent.parent / "data" / f"evaluation_results_{evaluation_id}.json"
+
     if not results_file_path.exists():
-        return jsonify({"message": "Evaluation results file not found"}), 404
+        return jsonify({"message": f"Evaluation results file not found at {results_file_path}"}), 404
     
     try:
         with open(results_file_path, 'r') as f:

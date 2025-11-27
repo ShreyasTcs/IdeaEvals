@@ -386,42 +386,65 @@ class DBHelper:
                 eval_data.update(eval_data['criteria'])
             
             for r_name, r_val in eval_data.items():
-                # Skip metadata keys
-                if r_name.upper() in ['SCHEMA_VERSION', 'RUBRIC_WEIGHTS', 'WEIGHTED_TOTAL', 'INVESTMENT_RECOMMENDATION', 'KEY_STRENGTHS', 'KEY_CONCERNS', 'ASSUMPTIONS', 'FLAGS', 'CRITERIA', 'PROTOTYPE_BONUS_APPLIED']:
+                # Skip strictly structural keys if needed, but user asked for EVERYTHING.
+                # We will exclude 'criteria' since we flattened it, and maybe 'rubric_weights' if it's redundant.
+                # But for now, let's try to store everything that looks like data.
+                if r_name.lower() == 'criteria':
                     continue
                 
                 score = None
                 reasoning = None
+
                 if isinstance(r_val, dict):
+                    # Standard rubric object
                     score = r_val.get('score')
-                    # Check for reasoning OR justification
                     reasoning = r_val.get('reasoning') or r_val.get('justification')
-                else:
-                    score = r_val # Assume it's just the score
+                    
+                    # If score is missing but reasoning exists, it's valid (e.g. qualitative feedback)
+                elif isinstance(r_val, (int, float)) and not isinstance(r_val, bool):
+                    # Numeric value (e.g. weighted_total)
+                    score = r_val
+                elif isinstance(r_val, str):
+                    # String value (e.g. investment_recommendation)
+                    reasoning = r_val
+                elif isinstance(r_val, (list, dict)):
+                    # Complex value (e.g. key_strengths, flags)
+                    reasoning = json.dumps(r_val)
+                elif r_val is None:
+                    continue # Skip nulls
                 
-                # Ensure score is float-compatible
-                if score is not None:
-                    # Handle boolean scores just in case
-                    if isinstance(score, bool):
-                         continue # Skip boolean flags that aren't in ignore list
-                    try:
-                        float(score)
-                        cur.execute(
-                            "INSERT INTO evaluations (db_idea_id, rubric_name, score, reasoning) VALUES (%s, %s, %s, %s)",
-                            (db_idea_id, r_name, score, reasoning)
-                        )
-                    except ValueError:
-                        logger.warning(f"Invalid score for rubric {r_name}: {score}")
+                # Final check to prevent boolean 'score' error if boolean slipped through (e.g. insufficient_info flag)
+                if isinstance(score, bool):
+                    score = None
+
+                # Insert
+                try:
+                    cur.execute(
+                        "INSERT INTO evaluations (db_idea_id, rubric_name, score, reasoning) VALUES (%s, %s, %s, %s)",
+                        (db_idea_id, r_name, score, reasoning)
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to insert evaluation field '{r_name}': {e}")
+
 
             # 5. Insert into VERIFICATIONS table
-            verif_data = idea_data.get('verification', {}) # Get from root idea_data, NOT llm_out
+            verif_data = idea_data.get('verification', {}) # Get from root idea_data
+            logger.info(f"Inserting verification data: {verif_data}") # Debug log
+            
+            # Robust extraction
+            v_status = verif_data.get('verification_status') or verif_data.get('status')
+            v_comments = str(verif_data.get('warnings', '')) if verif_data.get('warnings') else verif_data.get('comments')
+            # Handle if comments is list
+            if isinstance(v_comments, list):
+                v_comments = "; ".join(map(str, v_comments))
+                
             cur.execute(
                 "INSERT INTO verifications (db_idea_id, status, comments, flagged_issues) VALUES (%s, %s, %s, %s)",
                 (
                     db_idea_id,
-                    verif_data.get('verification_status') or verif_data.get('status'),
-                    str(verif_data.get('warnings', '')) if verif_data.get('warnings') else verif_data.get('comments'),
-                    json.dumps(verif_data) # Store full object for debugging/completeness
+                    v_status,
+                    v_comments,
+                    json.dumps(verif_data) # Store full object
                 )
             )
 
