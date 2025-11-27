@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Form, Button, Card, Alert, Spinner } from 'react-bootstrap';
 import FileUpload from './FileUpload';
 import RubricEditor from './RubricEditor';
@@ -9,15 +9,27 @@ import { startEvaluation } from '../api';
 
 type ViewState = 'setup' | 'processing' | 'results';
 
-const EvaluationSetup = () => {
-  const [hackathonName, setHackathonName] = useState('');
-  const [hackathonDescription, setHackathonNameDescription] = useState('');
+interface EvaluationSetupProps {
+  accessCode?: string;
+  initialName?: string;
+  initialDesc?: string;
+  onEvaluationStarted?: () => void;
+}
+
+const EvaluationSetup: React.FC<EvaluationSetupProps> = ({ accessCode, initialName = '', initialDesc = '', onEvaluationStarted }) => {
+  const [hackathonName, setHackathonName] = useState(initialName);
+  const [hackathonDescription, setHackathonNameDescription] = useState(initialDesc);
   const [rubrics, setRubrics] = useState<Rubric[]>([]);
   const [additionalFiles, setAdditionalFiles] = useState<string[]>([]);
   const [ideasFile, setIdeasFile] = useState<File | null>(null);
   const [view, setView] = useState<ViewState>('setup');
   const [evaluationId, setEvaluationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (initialName) setHackathonName(initialName);
+    if (initialDesc) setHackathonNameDescription(initialDesc);
+  }, [initialName, initialDesc]);
 
   const totalWeight = useMemo(() => {
     return rubrics.reduce((sum, rubric) => sum + rubric.weight, 0);
@@ -58,10 +70,16 @@ const EvaluationSetup = () => {
         rubrics,
         additionalFiles,
         ideasFile: ideasFileBase64, // Pass the base64 encoded file
-        ideasFileName: ideasFile?.name || ''
+        ideasFileName: ideasFile?.name || '',
+        accessCode // Pass the access code if available
       });
       setEvaluationId(response.evaluationId);
-      setView('processing');
+      
+      if (onEvaluationStarted) {
+        onEvaluationStarted();
+      } else {
+        setView('processing'); // Fallback for legacy behavior if prop not passed
+      }
     } catch (error) {
       alert('Failed to start evaluation. Please check console for details.');
       console.error(error);
@@ -76,7 +94,7 @@ const EvaluationSetup = () => {
         return (
           <Card>
             <Card.Body>
-              <Card.Title>Evaluation Setup</Card.Title>
+              <Card.Title>Evaluation Setup {accessCode && <span className="text-muted fs-6">(Code: {accessCode})</span>}</Card.Title>
               <Form>
                 <Form.Group className="mb-3" controlId="hackathonName">
                   <Form.Label>Hackathon Name</Form.Label>
@@ -86,6 +104,7 @@ const EvaluationSetup = () => {
                     value={hackathonName}
                     onChange={(e) => setHackathonName(e.target.value)}
                     required
+                    disabled={!!accessCode} // Disable if linked
                   />
                 </Form.Group>
                 <Form.Group className="mb-3" controlId="hackathonDescription">
@@ -96,6 +115,7 @@ const EvaluationSetup = () => {
                     placeholder="Enter hackathon description"
                     value={hackathonDescription}
                     onChange={(e) => setHackathonNameDescription(e.target.value)}
+                    disabled={!!accessCode}
                   />
                 </Form.Group>
               </Form>

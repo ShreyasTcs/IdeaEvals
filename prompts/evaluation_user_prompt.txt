@@ -24,4 +24,3 @@ RESPONSE FORMAT & RULES
 - investment_recommendation: one of [go, consider-with-mitigations, no-go].
 - Provide 2–3 key_strengths and 2–3 key_concerns (short, specific).
 - Optionally add up to 3 assumptions and any relevant flags [compliance_risk, novelty_unclear, integration_complexity, data_gaps, ethical_risk].
-- Set schema_version = "tcs-ideathon.v2" and echo the `rubric_weights` used for the calculation.

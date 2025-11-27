@@ -24,14 +24,16 @@ const ProcessingView: React.FC<ProcessingViewProps> = ({ evaluationId, onEvaluat
         const data = await getEvaluationProgress(evaluationId);
         setProgress(data);
 
-        if (data.status === 'completed' || data.status === 'failed') {
+        if (data.status === 'completed') {
           clearInterval(intervalId);
           onEvaluationComplete();
+        } else if (data.status === 'failed') {
+          clearInterval(intervalId);
+          setError(data.error || "Evaluation failed.");
         }
       } catch (err) {
         console.error('Error fetching progress:', err);
-        setError('Failed to fetch processing progress.');
-        clearInterval(intervalId);
+        // Don't set error immediately to avoid flashing on transient network issues
       }
     };
 
@@ -50,16 +52,20 @@ const ProcessingView: React.FC<ProcessingViewProps> = ({ evaluationId, onEvaluat
       <Card.Body>
         <Card.Title>Processing Evaluation</Card.Title>
         {error && <Alert variant="danger">{error}</Alert>}
-        <div className="text-center my-4">
-          <Spinner animation="border" role="status">
-            <span className="visually-hidden">Loading...</span>
-          </Spinner>
-          <p className="mt-3">Evaluation in progress...</p>
-        </div>
-        <ProgressBar now={percentage} label={`${percentage.toFixed(0)}%`} className="mb-3" />
-        <p>Processed Ideas: {progress.processed_ideas} / {progress.total_ideas}</p>
-        <p>Status: {progress.status}</p>
-        <p>Estimated Time Remaining: {progress.estimated_time_remaining}</p>
+        {!error && (
+          <>
+            <div className="text-center my-4">
+              <Spinner animation="border" role="status">
+                <span className="visually-hidden">Loading...</span>
+              </Spinner>
+              <p className="mt-3">Evaluation in progress...</p>
+            </div>
+            <ProgressBar now={percentage} label={`${percentage.toFixed(0)}%`} className="mb-3" />
+            <p>Processed Ideas: {progress.processed_ideas} / {progress.total_ideas}</p>
+            <p>Status: {progress.status}</p>
+            <p>Estimated Time Remaining: {progress.estimated_time_remaining}</p>
+          </>
+        )}
       </Card.Body>
     </Card>
   );

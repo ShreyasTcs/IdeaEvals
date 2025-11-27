@@ -55,13 +55,20 @@ def main():
     parser.add_argument('--progress_filepath', type=Path, help="Path to where progress should be stored (filename only).") # Changed help
     parser.add_argument('--hackathon_name', type=str, default="Hackathon", help="Name of the hackathon.")
     parser.add_argument('--hackathon_description', type=str, default="", help="Description of the hackathon.")
+    parser.add_argument('--hackathon_access_code', type=str, help="Access code for existing hackathon.")
+    parser.add_argument('--hackathon_passkey', type=str, help="Passkey for new hackathon.")
+    parser.add_argument('--session_dir_name', type=str, help="Optional: Force a specific session directory name.")
     args = parser.parse_args()
 
     # --- Dynamic Folder Creation ---
-    timestamp = datetime.now().strftime('%d%m%Y_%H%M')
-    # Sanitize hackathon name for folder use
-    safe_name = "".join(c for c in args.hackathon_name if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
-    session_dir_name = f"{safe_name}_{timestamp}"
+    if args.session_dir_name:
+        session_dir_name = args.session_dir_name
+    else:
+        timestamp = datetime.now().strftime('%d%m%Y_%H%M')
+        # Sanitize hackathon name for folder use
+        safe_name = "".join(c for c in args.hackathon_name if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+        session_dir_name = f"{safe_name}_{timestamp}"
+    
     session_dir = DATA_DIR / session_dir_name
     session_dir.mkdir(parents=True, exist_ok=True)
     print(f"📂 Output Directory Created: {session_dir}")
@@ -168,12 +175,18 @@ def main():
 
     # --- Setup Hackathon in DB ---
     print("💾 Setting up Hackathon in Database...")
-    logger.info(f"Calling setup_hackathon with Name='{args.hackathon_name}', Description='{args.hackathon_description}'")
-    hackathon_id, rubric_map = db_helper.setup_hackathon(args.hackathon_name, args.hackathon_description, rubrics)
-    logger.info(f"setup_hackathon returned: ID={hackathon_id}, Rubric Map Keys={list(rubric_map.keys()) if rubric_map else 'None'}")
+    logger.info(f"Calling setup_hackathon with Name='{args.hackathon_name}', Description='{args.hackathon_description}', AccessCode='{args.hackathon_access_code}'")
+    hackathon_id, rubric_map, access_code = db_helper.setup_hackathon(
+        args.hackathon_name, 
+        args.hackathon_description, 
+        rubrics,
+        passkey=args.hackathon_passkey,
+        existing_access_code=args.hackathon_access_code
+    )
+    logger.info(f"setup_hackathon returned: ID={hackathon_id}, Code={access_code}, Rubric Map Keys={list(rubric_map.keys()) if rubric_map else 'None'}")
     
     if hackathon_id:
-        print(f"✓ Hackathon setup complete. ID: {hackathon_id}")
+        print(f"✓ Hackathon setup complete. ID: {hackathon_id}, Access Code: {access_code}")
     else:
         print("⚠ Failed to setup Hackathon in DB. Data will only be saved to JSON.")
         logger.error("setup_hackathon failed to return a valid ID.")

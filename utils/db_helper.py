@@ -7,6 +7,8 @@ from pathlib import Path
 import logging
 import datetime
 import math
+import hashlib
+import secrets
 
 # Add project root to sys.path to allow importing config
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -17,6 +19,117 @@ logger = logging.getLogger(__name__)
 class DBHelper:
     def __init__(self):
         self.conn = None
+
+    def _run_schema_commands(self, conn):
+        """Executes the schema creation commands on the provided connection."""
+        commands = (
+            """
+            CREATE TABLE IF NOT EXISTS hackathons (
+                hackathon_id SERIAL PRIMARY KEY,
+                name VARCHAR(255),
+                description TEXT,
+                start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                access_code VARCHAR(50) UNIQUE,
+                passkey_hash VARCHAR(255),
+                current_evaluation_id VARCHAR(50)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id SERIAL PRIMARY KEY,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                role VARCHAR(50) DEFAULT 'participant'
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS rubrics (
+                rubric_id SERIAL PRIMARY KEY,
+                hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
+                rubric_name VARCHAR(255),
+                description TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ideas (
+                db_idea_id SERIAL PRIMARY KEY,
+                hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
+                external_idea_id VARCHAR(255),
+                title TEXT,
+                summary TEXT,
+                challenge_opportunity TEXT,
+                novelty_benefits_risks TEXT,
+                responsible_ai TEXT,
+                preferred_week VARCHAR(255),
+                build_preference VARCHAR(255),
+                build_approach VARCHAR(255),
+                code_preference VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS extractions (
+                extraction_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                extracted_content TEXT,
+                content_type VARCHAR(50),
+                file_paths TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS classifications (
+                classification_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                primary_theme VARCHAR(255),
+                secondary_themes TEXT,
+                theme_confidence DECIMAL(5,2),
+                theme_rationale TEXT,
+                primary_industry VARCHAR(255),
+                secondary_industries TEXT,
+                industry_confidence DECIMAL(5,2),
+                industry_rationale TEXT,
+                technologies TEXT,
+                technologies_rationale TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS evaluations (
+                evaluation_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                rubric_name VARCHAR(255),
+                score DECIMAL(5,2),
+                reasoning TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS verifications (
+                verification_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                status VARCHAR(50),
+                comments TEXT,
+                flagged_issues JSONB
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS full_results (
+                result_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                external_idea_id VARCHAR(255),
+                full_json_data JSONB,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        try:
+            cur = conn.cursor()
+            for command in commands:
+                cur.execute(command)
+            conn.commit()
+            cur.close()
+            logger.info("Schema initialized successfully.")
+        except Exception as e:
+            logger.error(f"Error running schema commands: {e}")
+            conn.rollback()
+            raise
 
     def connect(self, db_name=None):
         """Connect to the PostgreSQL database server."""
@@ -37,10 +150,14 @@ class DBHelper:
                 logger.warning(f"Database '{db_name}' does not exist. Creating it...")
                 self._create_database(db_name)
                 try:
+                    # Retry connection to the NEW database
                     self.conn = psycopg2.connect(**conn_params)
                     self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_DEFAULT)
+                    # Initialize schema immediately
+                    logger.info(f"Initializing schema for new database '{db_name}'...")
+                    self._run_schema_commands(self.conn)
                 except Exception as retry_error:
-                    logger.error(f"Error connecting after DB creation: {retry_error}")
+                    logger.error(f"Error connecting/initializing after DB creation: {retry_error}")
                     self.conn = None
             else:
                 logger.error(f"Error connecting to the database: {e}")
@@ -76,164 +193,113 @@ class DBHelper:
             self.conn = None
 
     def create_tables(self):
-        """Create the comprehensive schema tables."""
-        # Drop old tables first if needed? 
-        # User said "make these tables". We'll assume fresh start or IF NOT EXISTS. 
-        # But to ensure schema changes take effect, we should ideally drop. 
-        # However, "IF NOT EXISTS" is safer for data retention if user didn't ask to drop.
-        # Given "I want these tables... to be made", I'll assume we can create them.
-        # If they conflict with old 'submissions' table, we might have issues.
-        # I will drop the old ones to ensure the new structure applies.
-        
-        commands = (
-            "DROP TABLE IF EXISTS judging_results CASCADE",
-            "DROP TABLE IF EXISTS comments CASCADE",
-            "DROP TABLE IF EXISTS submissions CASCADE", # Replaced by ideas
-            "DROP TABLE IF EXISTS users CASCADE",
-            "DROP TABLE IF EXISTS rubrics CASCADE",
-            "DROP TABLE IF EXISTS hackathons CASCADE",
-            "DROP TABLE IF EXISTS ideas CASCADE",
-            "DROP TABLE IF EXISTS extractions CASCADE",
-            "DROP TABLE IF EXISTS classifications CASCADE",
-            "DROP TABLE IF EXISTS evaluations CASCADE",
-            "DROP TABLE IF EXISTS verifications CASCADE",
-            "DROP TABLE IF EXISTS full_results CASCADE",
-
-            """
-            CREATE TABLE hackathons (
-                hackathon_id SERIAL PRIMARY KEY,
-                name VARCHAR(255),
-                description TEXT,
-                start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE users (
-                user_id SERIAL PRIMARY KEY,
-                username VARCHAR(255) UNIQUE NOT NULL,
-                role VARCHAR(50) DEFAULT 'participant'
-            )
-            """,
-            """
-            CREATE TABLE rubrics (
-                rubric_id SERIAL PRIMARY KEY,
-                hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
-                rubric_name VARCHAR(255),
-                description TEXT
-            )
-            """,
-            """
-            CREATE TABLE ideas (
-                db_idea_id SERIAL PRIMARY KEY,
-                hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
-                external_idea_id VARCHAR(255),
-                title TEXT,
-                summary TEXT,
-                challenge_opportunity TEXT,
-                novelty_benefits_risks TEXT,
-                responsible_ai TEXT,
-                preferred_week VARCHAR(255),
-                build_preference VARCHAR(255),
-                build_approach VARCHAR(255),
-                code_preference VARCHAR(255),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE extractions (
-                extraction_id SERIAL PRIMARY KEY,
-                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
-                extracted_content TEXT,
-                content_type VARCHAR(50),
-                file_paths TEXT
-            )
-            """,
-            """
-            CREATE TABLE classifications (
-                classification_id SERIAL PRIMARY KEY,
-                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
-                primary_theme VARCHAR(255),
-                secondary_themes TEXT,
-                theme_confidence DECIMAL(5,2),
-                theme_rationale TEXT,
-                primary_industry VARCHAR(255),
-                secondary_industries TEXT,
-                industry_confidence DECIMAL(5,2),
-                industry_rationale TEXT,
-                technologies TEXT,
-                technologies_rationale TEXT
-            )
-            """,
-            """
-            CREATE TABLE evaluations (
-                evaluation_id SERIAL PRIMARY KEY,
-                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
-                rubric_name VARCHAR(255),
-                score DECIMAL(5,2),
-                reasoning TEXT
-            )
-            """,
-            """
-            CREATE TABLE verifications (
-                verification_id SERIAL PRIMARY KEY,
-                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
-                status VARCHAR(50),
-                comments TEXT,
-                flagged_issues JSONB
-            )
-            """,
-            """
-            CREATE TABLE full_results (
-                result_id SERIAL PRIMARY KEY,
-                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
-                external_idea_id VARCHAR(255),
-                full_json_data JSONB,
-                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        """Create the comprehensive schema tables safely (idempotent)."""
         try:
             self.connect()
             if not self.conn: 
                 logger.error("Connection failed, cannot create tables.")
                 return
-
-            cur = self.conn.cursor()
-            logger.info("Recreating tables with new schema...")
-            for command in commands:
-                cur.execute(command)
             
-            self.conn.commit()
-            cur.close()
-            logger.info("New tables created successfully.")
-        except (Exception, psycopg2.DatabaseError) as error:
-            logger.error(f"Error creating tables: {error}")
-            if self.conn:
+            logger.info("Verifying tables exist...")
+            self._run_schema_commands(self.conn)
+            
+            # Simple migration for current_evaluation_id if it doesn't exist
+            try:
+                cur = self.conn.cursor()
+                cur.execute("ALTER TABLE hackathons ADD COLUMN IF NOT EXISTS current_evaluation_id VARCHAR(50)")
+                self.conn.commit()
+                cur.close()
+            except Exception as e:
+                logger.warning(f"Migration warning (current_evaluation_id): {e}")
                 self.conn.rollback()
+
+            logger.info("Table verification complete.")
+        except Exception as error:
+            logger.error(f"Error creating tables: {error}")
             raise error
         finally:
             self.close()
 
-    def setup_hackathon(self, hackathon_name, hackathon_description, rubrics):
+    def set_current_evaluation(self, access_code, evaluation_id):
+        """Updates the current evaluation ID for a hackathon."""
+        try:
+            self.connect()
+            cur = self.conn.cursor()
+            cur.execute("UPDATE hackathons SET current_evaluation_id = %s WHERE access_code = %s", (evaluation_id, access_code))
+            self.conn.commit()
+            cur.close()
+        except Exception as e:
+            logger.error(f"Error setting evaluation ID: {e}")
+        finally:
+            self.close()
+
+    def get_hackathon_status(self, access_code):
+        """Gets the current evaluation ID for a hackathon."""
+        try:
+            self.connect()
+            cur = self.conn.cursor()
+            cur.execute("SELECT current_evaluation_id, name FROM hackathons WHERE access_code = %s", (access_code,))
+            res = cur.fetchone()
+            cur.close()
+            if res:
+                return {"current_evaluation_id": res[0], "hackathon_name": res[1]}
+            return None
+        except Exception as e:
+            logger.error(f"Error getting hackathon status: {e}")
+            return None
+        finally:
+            self.close()
+
+    def setup_hackathon(self, hackathon_name, hackathon_description, rubrics, passkey=None, existing_access_code=None):
         """
         Sets up the hackathon and rubrics.
+        If existing_access_code is provided, tries to find that hackathon.
+        Otherwise, creates a new one with generated access_code and hashed passkey.
         """
         logger.info(f"Starting setup_hackathon: Name='{hackathon_name}'")
         hackathon_id = None
         rubric_map = {}
+        access_code = existing_access_code
+
         try:
             self.connect()
             if not self.conn:
-                return None, None
+                return None, None, None
 
             cur = self.conn.cursor()
 
-            # 1. Insert hackathon
-            cur.execute("INSERT INTO hackathons (name, description, start_date) VALUES (%s, %s, %s) RETURNING hackathon_id",
-                        (hackathon_name, hackathon_description, datetime.datetime.now()))
-            hackathon_id = cur.fetchone()[0]
+            if existing_access_code:
+                # Try to find existing
+                cur.execute("SELECT hackathon_id FROM hackathons WHERE access_code = %s", (existing_access_code,))
+                res = cur.fetchone()
+                if res:
+                    hackathon_id = res[0]
+                    logger.info(f"Found existing hackathon ID {hackathon_id} for code {existing_access_code}")
+                    # If found, we might want to update rubrics or just return.
+                    # For simplicity, we'll just return the ID and map existing rubrics.
+                    cur.execute("SELECT rubric_name, rubric_id FROM rubrics WHERE hackathon_id = %s", (hackathon_id,))
+                    for r_name, r_id in cur.fetchall():
+                        rubric_map[r_name] = r_id
+                    
+                    cur.close()
+                    return hackathon_id, rubric_map, existing_access_code
+                else:
+                    logger.warning(f"Access code {existing_access_code} not found. Creating new hackathon.")
             
-            # 2. Create default user (legacy support if needed, though not strictly used in new schema unless added)
+            # Create new hackathon
+            if not access_code:
+                access_code = secrets.token_hex(4) # 8 characters
+            
+            passkey_hash = None
+            if passkey:
+                passkey_hash = hashlib.sha256(passkey.encode()).hexdigest()
+
+            cur.execute("INSERT INTO hackathons (name, description, start_date, access_code, passkey_hash) VALUES (%s, %s, %s, %s, %s) RETURNING hackathon_id",
+                        (hackathon_name, hackathon_description, datetime.datetime.now(), access_code, passkey_hash))
+            hackathon_id = cur.fetchone()[0]
+            logger.info(f"Hackathon setup: ID {hackathon_id}, Code {access_code}")
+
+            # 2. Create default user
             cur.execute("INSERT INTO users (username, role) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
                         ('default_participant', 'participant'))
 
@@ -266,13 +332,116 @@ class DBHelper:
             
             self.conn.commit()
             cur.close()
-            return hackathon_id, rubric_map
+            return hackathon_id, rubric_map, access_code
 
         except (Exception, psycopg2.DatabaseError) as error:
             logger.error(f"Error setting up hackathon: {error}")
             if self.conn:
                 self.conn.rollback()
-            return None, None
+            return None, None, None
+        finally:
+            self.close()
+
+    def validate_hackathon_access(self, access_code, passkey):
+        """Validates access code and passkey."""
+        try:
+            self.connect()
+            cur = self.conn.cursor()
+            cur.execute("SELECT passkey_hash FROM hackathons WHERE access_code = %s", (access_code,))
+            res = cur.fetchone()
+            cur.close()
+            
+            if not res:
+                return False # Not found
+            
+            stored_hash = res[0]
+            if not stored_hash:
+                return True # No passkey set
+            
+            input_hash = hashlib.sha256(passkey.encode()).hexdigest()
+            return input_hash == stored_hash
+            
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
+            return False
+        finally:
+            self.close()
+
+    def get_dashboard_data(self, access_code):
+        """Fetches aggregated data for the dashboard."""
+        try:
+            self.connect()
+            cur = self.conn.cursor()
+            
+            # Get hackathon ID
+            cur.execute("SELECT hackathon_id, name FROM hackathons WHERE access_code = %s", (access_code,))
+            h_res = cur.fetchone()
+            if not h_res:
+                return None
+            hackathon_id, hackathon_name = h_res
+
+            # Get ideas with scores
+            query = """
+                SELECT 
+                    i.external_idea_id, 
+                    i.title, 
+                    i.summary,
+                    c.primary_theme,
+                    c.primary_industry,
+                    v.status as verification_status,
+                    (SELECT SUM(score) FROM evaluations e WHERE e.db_idea_id = i.db_idea_id) as total_score
+                FROM ideas i
+                LEFT JOIN classifications c ON i.db_idea_id = c.db_idea_id
+                LEFT JOIN verifications v ON i.db_idea_id = v.db_idea_id
+                WHERE i.hackathon_id = %s
+            """
+            cur.execute(query, (hackathon_id,))
+            rows = cur.fetchall()
+            
+            ideas = []
+            for r in rows:
+                ideas.append({
+                    "idea_id": r[0],
+                    "title": r[1],
+                    "summary": r[2],
+                    "theme": r[3],
+                    "industry": r[4],
+                    "status": r[5],
+                    "total_score": float(r[6]) if r[6] else 0.0
+                })
+            
+            cur.close()
+            return {"hackathon_name": hackathon_name, "ideas": ideas}
+
+        except Exception as e:
+            logger.error(f"Dashboard fetch error: {e}")
+            return None
+        finally:
+            self.close()
+
+    def get_idea_details(self, external_idea_id):
+        """Fetches detailed data for a specific idea."""
+        try:
+            self.connect()
+            cur = self.conn.cursor()
+            
+            cur.execute("SELECT db_idea_id, full_json_data FROM full_results WHERE external_idea_id = %s", (external_idea_id,))
+            res = cur.fetchone()
+            
+            if not res:
+                # Fallback to search by ID in ideas table if full_results missing
+                cur.execute("SELECT db_idea_id FROM ideas WHERE external_idea_id = %s", (external_idea_id,))
+                res_id = cur.fetchone()
+                if not res_id:
+                    return None
+                # Construct details manually if full json missing (simplified for now)
+                return {"error": "Full details not processed yet"}
+            
+            return res[1] # Return the stored JSONB
+
+        except Exception as e:
+            logger.error(f"Detail fetch error: {e}")
+            return None
         finally:
             self.close()
 
@@ -386,10 +555,8 @@ class DBHelper:
                 eval_data.update(eval_data['criteria'])
             
             for r_name, r_val in eval_data.items():
-                # Skip strictly structural keys if needed, but user asked for EVERYTHING.
-                # We will exclude 'criteria' since we flattened it, and maybe 'rubric_weights' if it's redundant.
-                # But for now, let's try to store everything that looks like data.
-                if r_name.lower() == 'criteria':
+                # Skip metadata keys
+                if r_name.upper() in ['SCHEMA_VERSION', 'RUBRIC_WEIGHTS', 'WEIGHTED_TOTAL', 'INVESTMENT_RECOMMENDATION', 'KEY_STRENGTHS', 'KEY_CONCERNS', 'ASSUMPTIONS', 'FLAGS', 'CRITERIA', 'PROTOTYPE_BONUS_APPLIED']:
                     continue
                 
                 score = None

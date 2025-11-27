@@ -3,6 +3,7 @@ from flask_cors import CORS
 import uuid
 import threading
 import time
+import datetime
 import json
 import os 
 from pathlib import Path
@@ -58,9 +59,15 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 from core.idea_processor import IdeaProcessor
 from llm.azure_openai_provider import AzureOpenAIProvider
+from utils.db_helper import DBHelper
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+
+# Initialize DB Helper
+db_helper = DBHelper()
+# Ensure tables exist (non-destructive)
+db_helper.create_tables()
 
 # In-memory storage for evaluation states
 evaluations = {} # {evaluation_id: {status: 'pending'|'processing'|'completed'|'failed', progress: {...}, results: {...}}}
@@ -85,7 +92,7 @@ def parse_ideas_file(file_content: bytes, filename: str) -> list[dict]:
     # Convert DataFrame to a list of dictionaries
     return df.to_dict(orient='records')
 
-def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, rubrics, additional_files, ideas_file_base64, ideas_file_name):
+def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, rubrics, additional_files, ideas_file_base64, ideas_file_name, access_code=None):
     logger.info(f"Starting evaluation task for ID: {evaluation_id})")
     
     project_root = Path(__file__).parent.parent
@@ -97,14 +104,26 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
     data_dir.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
 
+    # Pre-calculate session directory to ensure app.py knows where files are
+    timestamp = datetime.datetime.now().strftime('%d%m%Y_%H%M')
+    safe_name = "".join(c for c in hackathon_name if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+    session_dir_name = f"{safe_name}_{timestamp}"
+    session_dir = data_dir / session_dir_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+
     ideas_filepath = data_dir / f"ideas_{evaluation_id}.xlsx"
     rubrics_filepath = config_dir / f"rubrics_{evaluation_id}.json"
-    output_filepath = data_dir / f"evaluation_results_{evaluation_id}.json"
-    progress_filepath = data_dir / f"progress_{evaluation_id}.json"
+    
+    # Output files are now strictly in the session directory
+    output_filename = f"evaluation_results_{evaluation_id}.json"
+    progress_filename = f"progress_{evaluation_id}.json"
+    output_filepath = session_dir / output_filename
+    progress_filepath = session_dir / progress_filename
 
     evaluations[evaluation_id] = {
         'status': 'pending',
         'progress_filepath': str(progress_filepath),
+        'output_file': str(output_filepath),
         'results': None,
         'error': None
     }
@@ -131,11 +150,16 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
             str(run_pipeline_script),
             '--ideas_filepath', str(ideas_filepath),
             '--rubrics_filepath', str(rubrics_filepath),
-            '--output_filepath', str(output_filepath),
-            '--progress_filepath', str(progress_filepath),
+            '--output_filepath', str(output_filepath), # Pipeline takes name from here
+            '--progress_filepath', str(progress_filepath), # Pipeline takes name from here
             '--hackathon_name', hackathon_name,
-            '--hackathon_description', hackathon_description
+            '--hackathon_description', hackathon_description,
+            '--session_dir_name', session_dir_name # Force specific folder
         ]
+        
+        if access_code:
+            command.extend(['--hackathon_access_code', access_code])
+
         process = subprocess.run(
             command,
             capture_output=True,
@@ -148,34 +172,16 @@ def run_evaluation_task(evaluation_id, hackathon_name, hackathon_description, ru
         if process.stderr:
             logger.warning(f"Pipeline stderr:\n{process.stderr}")
 
-        # Parse stdout to find the actual output file path (dynamic folder)
-        actual_output_filepath = output_filepath
-        for line in process.stdout.splitlines():
-            if "Results have been incrementally saved to" in line:
-                try:
-                    # Extract path after "saved to "
-                    path_str = line.split("saved to ")[1].strip()
-                    actual_output_filepath = Path(path_str)
-                    logger.info(f"Detected dynamic output path: {actual_output_filepath}")
-                    break
-                except IndexError:
-                    logger.warning("Could not parse output path from log line.")
-
         # 4. Read results from the generated JSON file
-        if not actual_output_filepath.exists():
-            # Fallback check for the original path just in case
-            if output_filepath.exists():
-                actual_output_filepath = output_filepath
-            else:
-                raise FileNotFoundError(f"Pipeline did not generate expected output file at {actual_output_filepath} or {output_filepath}")
+        if not output_filepath.exists():
+             raise FileNotFoundError(f"Pipeline did not generate expected output file at {output_filepath}")
         
-        with open(actual_output_filepath, 'r', encoding='utf-8') as f:
+        with open(output_filepath, 'r', encoding='utf-8') as f:
             results = json.load(f)
-        logger.info(f"Results loaded from {actual_output_filepath}")
+        logger.info(f"Results loaded from {output_filepath}")
 
         evaluations[evaluation_id]['status'] = 'completed'
         evaluations[evaluation_id]['results'] = results
-        evaluations[evaluation_id]['output_file'] = str(actual_output_filepath) # Store for retrieval
         logger.info(f"Evaluation task {evaluation_id} completed successfully.")
 
     except FileNotFoundError as e:
@@ -213,6 +219,7 @@ def start_evaluation():
     additional_files = data.get('additionalFiles')
     ideas_file_base64 = data.get('ideasFile')
     ideas_file_name = data.get('ideasFileName')
+    access_code = data.get('accessCode') # New field
 
     if not all([hackathon_name, rubrics, ideas_file_base64, ideas_file_name]):
         return jsonify({"message": "Missing required evaluation parameters"}), 400
@@ -220,10 +227,50 @@ def start_evaluation():
     evaluation_id = str(uuid.uuid4())
     
     # Start the evaluation in a new thread
-    thread = threading.Thread(target=run_evaluation_task, args=(evaluation_id, hackathon_name, hackathon_description, rubrics, additional_files, ideas_file_base64, ideas_file_name))
+    thread = threading.Thread(target=run_evaluation_task, args=(evaluation_id, hackathon_name, hackathon_description, rubrics, additional_files, ideas_file_base64, ideas_file_name, access_code))
     thread.start()
+    
+    if access_code:
+        db_helper.set_current_evaluation(access_code, evaluation_id)
 
     return jsonify({"evaluationId": evaluation_id}), 202 # 202 Accepted
+
+@app.route('/api/hackathon/<access_code>/status', methods=['GET'])
+def get_hackathon_status(access_code):
+    status_data = db_helper.get_hackathon_status(access_code)
+    if not status_data:
+        return jsonify({"message": "Hackathon not found"}), 404
+    
+    evaluation_id = status_data.get('current_evaluation_id')
+    response = {
+        "hackathonName": status_data.get('hackathon_name'),
+        "currentEvaluationId": evaluation_id,
+        "status": "idle"
+    }
+
+    if evaluation_id:
+        # Check in-memory or file status
+        eval_state = evaluations.get(evaluation_id)
+        if eval_state:
+            response['status'] = eval_state['status']
+        else:
+            # Check file if not in memory (server restart case)
+            # We assume data path convention
+            progress_path = Path(__file__).parent.parent / "data" / f"progress_{evaluation_id}.json"
+            if progress_path.exists():
+                try:
+                    with open(progress_path, 'r') as f:
+                        p = json.load(f)
+                        response['status'] = p.get('status', 'unknown')
+                except:
+                    response['status'] = 'unknown'
+            else:
+                 # If no progress file, maybe check result file
+                 result_path = Path(__file__).parent.parent / "data" / f"evaluation_results_{evaluation_id}.json"
+                 if result_path.exists():
+                     response['status'] = 'completed'
+    
+    return jsonify(response), 200
 
 @app.route('/evaluation/progress/<evaluation_id>', methods=['GET'])
 def get_evaluation_progress(evaluation_id):
@@ -313,6 +360,60 @@ def generate_rubric_description():
     except Exception as e:
         logger.error(f"Error generating rubric description: {e}", exc_info=True)
         return jsonify({"message": str(e)}), 500
+
+# --- New Hackathon Management Routes ---
+
+@app.route('/api/hackathon/init', methods=['POST'])
+def init_hackathon():
+    data = request.get_json()
+    name = data.get('name')
+    description = data.get('description')
+    passkey = data.get('passkey')
+    
+    if not name:
+        return jsonify({"message": "Hackathon name is required"}), 400
+        
+    try:
+        # Init with empty rubrics, they will be added during evaluation if needed or we can add an update endpoint later
+        hackathon_id, _, access_code = db_helper.setup_hackathon(name, description, {}, passkey=passkey)
+        if access_code:
+            return jsonify({"accessCode": access_code, "hackathonId": hackathon_id}), 201
+        else:
+            return jsonify({"message": "Failed to initialize hackathon"}), 500
+    except Exception as e:
+        logger.error(f"Init hackathon error: {e}", exc_info=True)
+        return jsonify({"message": str(e)}), 500
+
+@app.route('/api/hackathon/login', methods=['POST'])
+def login_hackathon():
+    data = request.get_json()
+    access_code = data.get('accessCode')
+    passkey = data.get('passkey')
+    
+    if not access_code:
+        return jsonify({"message": "Access code is required"}), 400
+        
+    is_valid = db_helper.validate_hackathon_access(access_code, passkey)
+    if is_valid:
+        return jsonify({"success": True}), 200
+    else:
+        return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+@app.route('/api/hackathon/<access_code>/dashboard', methods=['GET'])
+def get_dashboard(access_code):
+    data = db_helper.get_dashboard_data(access_code)
+    if data:
+        return jsonify(data), 200
+    else:
+        return jsonify({"message": "Hackathon not found or no data"}), 404
+
+@app.route('/api/idea/<external_idea_id>/details', methods=['GET'])
+def get_idea_details(external_idea_id):
+    data = db_helper.get_idea_details(external_idea_id)
+    if data:
+        return jsonify(data), 200
+    else:
+        return jsonify({"message": "Idea not found"}), 404
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
