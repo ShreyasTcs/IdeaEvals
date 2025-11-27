@@ -27,24 +27,30 @@ from core.idea_processor import IdeaProcessor
 from utils.db_helper import DBHelper
 
 # --- Logging Setup ---
-# Configure file handler for detailed logs
-file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+print(f"DEBUG: Log file path is set to: {LOG_FILE}")
+
+# Force-reset logging configuration
+root_logger = logging.getLogger()
+if root_logger.handlers:
+    for handler in root_logger.handlers:
+        root_logger.removeHandler(handler)
+
+# Create handlers
+file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a') # Append mode
 file_handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
-# Configure stream handler for minimal console output (only WARNING and above)
 stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.WARNING)  # Only show warnings and errors in console
+stream_handler.setLevel(logging.WARNING)
 stream_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),  # Base level for all handlers
-    handlers=[
-        file_handler,
-        stream_handler
-    ]
-)
+# Configure root logger
+root_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+root_logger.addHandler(file_handler)
+root_logger.addHandler(stream_handler)
+
 logger = logging.getLogger(__name__)
+logger.info("--- Logging Initialized ---") # Immediate test write
 
 # --- Main Application ---
 def main():
@@ -54,6 +60,10 @@ def main():
     print("\n" + "="*80)
     print("🎯 MODULAR HACKATHON EVALUATION PIPELINE")
     print("="*80 + "\n")
+    
+    logger.info("----------------------------------------------------------------")
+    logger.info("   STARTING PIPELINE EXECUTION")
+    logger.info("----------------------------------------------------------------")
 
     parser = argparse.ArgumentParser(description="Modular Hackathon Evaluation Pipeline")
     parser.add_argument('--ideas_filepath', type=Path, required=True, help="Path to the ideas XLSX file.")
@@ -132,11 +142,15 @@ def main():
 
     # --- Setup Hackathon in DB ---
     print("💾 Setting up Hackathon in Database...")
+    logger.info(f"Calling setup_hackathon with Name='{args.hackathon_name}', Description='{args.hackathon_description}'")
     hackathon_id, rubric_map = db_helper.setup_hackathon(args.hackathon_name, args.hackathon_description, rubrics)
+    logger.info(f"setup_hackathon returned: ID={hackathon_id}, Rubric Map Keys={list(rubric_map.keys()) if rubric_map else 'None'}")
+    
     if hackathon_id:
         print(f"✓ Hackathon setup complete. ID: {hackathon_id}")
     else:
         print("⚠ Failed to setup Hackathon in DB. Data will only be saved to JSON.")
+        logger.error("setup_hackathon failed to return a valid ID.")
 
     # --- Core Processor ---
     idea_processor = IdeaProcessor(llm_provider=llm_provider, rubrics=rubrics)
@@ -180,7 +194,10 @@ def main():
 
             # Save to DB incrementally
             if hackathon_id:
+                logger.debug(f"Triggering DB insert for idea. Hackathon ID: {hackathon_id}")
                 db_helper.insert_single_idea(hackathon_id, result, rubric_map)
+            else:
+                logger.warning("Skipping DB insert because hackathon_id is missing.")
             
             processed_ideas_count += 1
             

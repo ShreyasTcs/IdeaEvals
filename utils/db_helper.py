@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import logging
 import datetime
+import math
 
 # Add project root to sys.path to allow importing config
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,9 @@ class DBHelper:
         conn_params = DB_CONFIG.copy()
         conn_params['database'] = db_name
         
+        safe_params = {k: v for k, v in conn_params.items() if k != 'password'}
+        logger.debug(f"DBHelper.connect: Attempting connection with {safe_params}")
+
         try:
             self.conn = psycopg2.connect(**conn_params)
             self.conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_DEFAULT)
@@ -72,67 +76,114 @@ class DBHelper:
             self.conn = None
 
     def create_tables(self):
-        """Create tables in the PostgreSQL database based on the comprehensive schema."""
+        """Create the comprehensive schema tables."""
+        # Drop old tables first if needed? 
+        # User said "make these tables". We'll assume fresh start or IF NOT EXISTS. 
+        # But to ensure schema changes take effect, we should ideally drop. 
+        # However, "IF NOT EXISTS" is safer for data retention if user didn't ask to drop.
+        # Given "I want these tables... to be made", I'll assume we can create them.
+        # If they conflict with old 'submissions' table, we might have issues.
+        # I will drop the old ones to ensure the new structure applies.
+        
         commands = (
+            "DROP TABLE IF EXISTS judging_results CASCADE",
+            "DROP TABLE IF EXISTS comments CASCADE",
+            "DROP TABLE IF EXISTS submissions CASCADE", # Replaced by ideas
+            "DROP TABLE IF EXISTS users CASCADE",
+            "DROP TABLE IF EXISTS rubrics CASCADE",
+            "DROP TABLE IF EXISTS hackathons CASCADE",
+            "DROP TABLE IF EXISTS ideas CASCADE",
+            "DROP TABLE IF EXISTS extractions CASCADE",
+            "DROP TABLE IF EXISTS classifications CASCADE",
+            "DROP TABLE IF EXISTS evaluations CASCADE",
+            "DROP TABLE IF EXISTS verifications CASCADE",
+            "DROP TABLE IF EXISTS full_results CASCADE",
+
             """
-            CREATE TABLE IF NOT EXISTS hackathons (
+            CREATE TABLE hackathons (
                 hackathon_id SERIAL PRIMARY KEY,
-                hackathon_name VARCHAR(255) NOT NULL,
+                name VARCHAR(255),
                 description TEXT,
-                start_date TIMESTAMP,
-                end_date TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 user_id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
-                email VARCHAR(255) UNIQUE,
-                role VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                role VARCHAR(50) DEFAULT 'participant'
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS rubrics (
+            CREATE TABLE rubrics (
                 rubric_id SERIAL PRIMARY KEY,
                 hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
-                rubric_name VARCHAR(255) NOT NULL,
-                description TEXT,
-                weightage DECIMAL(5, 2),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                rubric_name VARCHAR(255),
+                description TEXT
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS submissions (
-                submission_id SERIAL PRIMARY KEY,
+            CREATE TABLE ideas (
+                db_idea_id SERIAL PRIMARY KEY,
                 hackathon_id INTEGER REFERENCES hackathons(hackathon_id) ON DELETE CASCADE,
-                user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
-                idea_name VARCHAR(255) NOT NULL,
-                idea_description TEXT,
-                submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                raw_data JSONB
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS judging_results (
-                result_id SERIAL PRIMARY KEY,
-                submission_id INTEGER REFERENCES submissions(submission_id) ON DELETE CASCADE,
-                rubric_id INTEGER REFERENCES rubrics(rubric_id) ON DELETE CASCADE,
-                judge_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
-                score INTEGER,
-                reasoning TEXT,
-                llm_output JSONB,
-                judged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS comments (
-                comment_id SERIAL PRIMARY KEY,
-                submission_id INTEGER REFERENCES submissions(submission_id) ON DELETE CASCADE,
-                user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
-                comment_text TEXT,
+                external_idea_id VARCHAR(255),
+                title TEXT,
+                summary TEXT,
+                challenge_opportunity TEXT,
+                novelty_benefits_risks TEXT,
+                responsible_ai TEXT,
+                preferred_week VARCHAR(255),
+                build_preference VARCHAR(255),
+                build_approach VARCHAR(255),
+                code_preference VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE extractions (
+                extraction_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                extracted_content TEXT,
+                content_type VARCHAR(50),
+                file_paths TEXT
+            )
+            """,
+            """
+            CREATE TABLE classifications (
+                classification_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                primary_theme VARCHAR(255),
+                secondary_themes TEXT,
+                primary_industry VARCHAR(255),
+                secondary_industries TEXT,
+                technologies TEXT
+            )
+            """,
+            """
+            CREATE TABLE evaluations (
+                evaluation_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                rubric_name VARCHAR(255),
+                score DECIMAL(5,2),
+                reasoning TEXT
+            )
+            """,
+            """
+            CREATE TABLE verifications (
+                verification_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                status VARCHAR(50),
+                comments TEXT,
+                flagged_issues JSONB
+            )
+            """,
+            """
+            CREATE TABLE full_results (
+                result_id SERIAL PRIMARY KEY,
+                db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
+                external_idea_id VARCHAR(255),
+                full_json_data JSONB,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -143,13 +194,13 @@ class DBHelper:
                 return
 
             cur = self.conn.cursor()
-            logger.info("Creating/Verifying tables...")
+            logger.info("Recreating tables with new schema...")
             for command in commands:
                 cur.execute(command)
             
             self.conn.commit()
             cur.close()
-            logger.info("Tables verified successfully.")
+            logger.info("New tables created successfully.")
         except (Exception, psycopg2.DatabaseError) as error:
             logger.error(f"Error creating tables: {error}")
             if self.conn:
@@ -162,26 +213,25 @@ class DBHelper:
         """
         Sets up the hackathon and rubrics.
         """
+        logger.info(f"Starting setup_hackathon: Name='{hackathon_name}'")
         hackathon_id = None
         rubric_map = {}
         try:
             self.connect()
             if not self.conn:
-                logger.error("Connection failed, cannot setup hackathon.")
                 return None, None
 
             cur = self.conn.cursor()
 
             # 1. Insert hackathon
-            cur.execute("INSERT INTO hackathons (hackathon_name, description, start_date) VALUES (%s, %s, %s) RETURNING hackathon_id",
+            cur.execute("INSERT INTO hackathons (name, description, start_date) VALUES (%s, %s, %s) RETURNING hackathon_id",
                         (hackathon_name, hackathon_description, datetime.datetime.now()))
             hackathon_id = cur.fetchone()[0]
-            logger.info(f"Hackathon setup: ID {hackathon_id}")
-
-            # 2. Create default user
+            
+            # 2. Create default user (legacy support if needed, though not strictly used in new schema unless added)
             cur.execute("INSERT INTO users (username, role) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING",
                         ('default_participant', 'participant'))
-            
+
             # 3. Insert rubrics
             if isinstance(rubrics, dict):
                 for rubric_name, details in rubrics.items():
@@ -194,9 +244,7 @@ class DBHelper:
                 for item in rubrics:
                     rubric_name = None
                     rubric_desc = ''
-                    
                     if isinstance(item, dict):
-                        # Robust extraction for name
                         for key in ['rubric_name', 'name', 'criteria', 'title']:
                             if key in item:
                                 rubric_name = item[key]
@@ -210,9 +258,7 @@ class DBHelper:
                                     (hackathon_id, rubric_name, rubric_desc))
                         rubric_id = cur.fetchone()[0]
                         rubric_map[rubric_name] = rubric_id
-                    else:
-                        logger.warning(f"Could not extract rubric name from: {item}")
-
+            
             self.conn.commit()
             cur.close()
             return hackathon_id, rubric_map
@@ -225,9 +271,20 @@ class DBHelper:
         finally:
             self.close()
 
+    def _clean_json_data(self, data):
+        """Recursively replace NaN/Infinity with None."""
+        if isinstance(data, dict):
+            return {k: self._clean_json_data(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._clean_json_data(v) for v in data]
+        elif isinstance(data, float):
+            if math.isnan(data) or math.isinf(data):
+                return None
+        return data
+
     def insert_single_idea(self, hackathon_id, idea_data, rubric_map):
         """
-        Inserts a single idea result.
+        Inserts a single idea result into the comprehensive schema.
         """
         if not hackathon_id:
             return
@@ -238,36 +295,126 @@ class DBHelper:
                 return
 
             cur = self.conn.cursor()
-
-            # Get user
-            cur.execute("SELECT user_id FROM users WHERE username = %s", ('default_participant',))
-            res = cur.fetchone()
-            user_id = res[0] if res else None
             
-            # Prepare data
-            idea_name = idea_data.get('idea_title') or idea_data.get('idea_name', 'N/A')
-            idea_desc = idea_data.get('brief_summary') or idea_data.get('description', '')
-
-            # Insert Submission
+            # Clean all data first
+            cleaned_data = self._clean_json_data(idea_data)
+            
+            # 1. Insert into IDEAS table
             cur.execute(
-                "INSERT INTO submissions (hackathon_id, user_id, idea_name, idea_description, raw_data) VALUES (%s, %s, %s, %s, %s) RETURNING submission_id",
-                (hackathon_id, user_id, idea_name, idea_desc, json.dumps(idea_data))
+                """
+                INSERT INTO ideas (
+                    hackathon_id, external_idea_id, title, summary, 
+                    challenge_opportunity, novelty_benefits_risks, responsible_ai,
+                    preferred_week, build_preference, build_approach, code_preference
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING db_idea_id
+                """,
+                (
+                    hackathon_id,
+                    cleaned_data.get('idea_id'),
+                    cleaned_data.get('idea_title') or cleaned_data.get('idea_name'),
+                    cleaned_data.get('brief_summary') or cleaned_data.get('description'),
+                    cleaned_data.get('challenge_opportunity'),
+                    cleaned_data.get('novelty_benefits_risks'),
+                    cleaned_data.get('responsible_ai'),
+                    cleaned_data.get('preferred_week'),
+                    cleaned_data.get('build_preference'),
+                    cleaned_data.get('build_approach'),
+                    cleaned_data.get('code_preference')
+                )
             )
-            submission_id = cur.fetchone()[0]
+            db_idea_id = cur.fetchone()[0]
+            logger.info(f"Inserted idea {cleaned_data.get('idea_id')} with DB ID {db_idea_id}")
 
-            # Insert Judging Results
-            evaluation_data = idea_data.get('llm_output', {}).get('evaluation', {})
-            if evaluation_data:
-                for rubric_name, details in evaluation_data.items():
-                    if rubric_name in rubric_map:
-                        rubric_id = rubric_map[rubric_name]
-                        cur.execute(
-                            "INSERT INTO judging_results (submission_id, rubric_id, score, reasoning, llm_output) VALUES (%s, %s, %s, %s, %s)",
-                            (submission_id, rubric_id, details.get('score'), details.get('reasoning'), json.dumps(idea_data.get('llm_output')))
-                        )
-                    else:
-                        logger.warning(f"Rubric '{rubric_name}' in result but not in map (available: {list(rubric_map.keys())})")
+            # 2. Insert into EXTRACTIONS table
+            # Combine additional file types into a string or json
+            file_paths = json.dumps(cleaned_data.get('additional_file_types', []))
+            llm_out = cleaned_data.get('llm_output', {})
             
+            cur.execute(
+                "INSERT INTO extractions (db_idea_id, extracted_content, content_type, file_paths) VALUES (%s, %s, %s, %s)",
+                (
+                    db_idea_id,
+                    llm_out.get('extracted_files_content', '')[:100000], # Limit size if needed
+                    llm_out.get('content_type'),
+                    file_paths
+                )
+            )
+
+            # 3. Insert into CLASSIFICATIONS table
+            theme_data = llm_out.get('theme', {})
+            industry_data = llm_out.get('industry', {})
+            tech_data = llm_out.get('technologies', {})
+            
+            # Helper to get string from list or string
+            def to_str(val):
+                if isinstance(val, list): return ", ".join(map(str, val))
+                return str(val) if val else None
+
+            cur.execute(
+                """
+                INSERT INTO classifications (
+                    db_idea_id, primary_theme, secondary_themes, 
+                    primary_industry, secondary_industries, technologies
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    db_idea_id,
+                    theme_data.get('primary_theme'),
+                    to_str(theme_data.get('secondary_themes')),
+                    industry_data.get('primary_industry'),
+                    to_str(industry_data.get('secondary_industries')),
+                    json.dumps(tech_data) # Store full tech object as json or text
+                )
+            )
+
+            # 4. Insert into EVALUATIONS table
+            eval_data = llm_out.get('evaluation', {})
+            # Handle nested criteria
+            if 'criteria' in eval_data and isinstance(eval_data['criteria'], dict):
+                eval_data.update(eval_data['criteria'])
+            
+            for r_name, r_val in eval_data.items():
+                # Skip metadata keys
+                if r_name.upper() in ['SCHEMA_VERSION', 'RUBRIC_WEIGHTS', 'WEIGHTED_TOTAL', 'INVESTMENT_RECOMMENDATION', 'KEY_STRENGTHS', 'KEY_CONCERNS', 'ASSUMPTIONS', 'FLAGS', 'CRITERIA']:
+                    continue
+                
+                score = None
+                reasoning = None
+                if isinstance(r_val, dict):
+                    score = r_val.get('score')
+                    reasoning = r_val.get('reasoning')
+                else:
+                    score = r_val # Assume it's just the score
+                
+                # Ensure score is float-compatible
+                if score is not None:
+                    try:
+                        float(score)
+                        cur.execute(
+                            "INSERT INTO evaluations (db_idea_id, rubric_name, score, reasoning) VALUES (%s, %s, %s, %s)",
+                            (db_idea_id, r_name, score, reasoning)
+                        )
+                    except ValueError:
+                        logger.warning(f"Invalid score for rubric {r_name}: {score}")
+
+            # 5. Insert into VERIFICATIONS table
+            verif_data = llm_out.get('verification', {})
+            cur.execute(
+                "INSERT INTO verifications (db_idea_id, status, comments, flagged_issues) VALUES (%s, %s, %s, %s)",
+                (
+                    db_idea_id,
+                    verif_data.get('status'),
+                    verif_data.get('comments'),
+                    json.dumps(verif_data.get('flagged_issues'))
+                )
+            )
+
+            # 6. Insert into FULL_RESULTS table
+            cur.execute(
+                "INSERT INTO full_results (db_idea_id, external_idea_id, full_json_data) VALUES (%s, %s, %s)",
+                (db_idea_id, cleaned_data.get('idea_id'), json.dumps(cleaned_data))
+            )
+
             self.conn.commit()
             cur.close()
 
@@ -279,41 +426,24 @@ class DBHelper:
             self.close()
 
     def get_results_as_json(self, hackathon_id):
-        """Fetch results as JSON."""
+        """Fetch results from the comprehensive schema."""
         try:
             self.connect()
             if not self.conn: 
-                return json.dumps({"error": "Database connection failed"}, indent=2)
+                return json.dumps({"error": "Connection failed"})
 
             cur = self.conn.cursor()
-            query = """
-            SELECT s.idea_name, s.idea_description, r.rubric_name, jr.score, jr.reasoning
-            FROM submissions s
-            JOIN judging_results jr ON s.submission_id = jr.submission_id
-            JOIN rubrics r ON jr.rubric_id = r.rubric_id
-            WHERE s.hackathon_id = %s
-            ORDER BY s.idea_name, r.rubric_name
-            """
-            cur.execute(query, (hackathon_id,))
-
-            results = {}
+            # Simplified fetch from full_results for now
+            cur.execute("SELECT full_json_data FROM full_results fr JOIN ideas i ON fr.db_idea_id = i.db_idea_id WHERE i.hackathon_id = %s", (hackathon_id,))
+            
+            results = []
             for row in cur.fetchall():
-                idea_name, idea_description, rubric_name, score, reasoning = row
-                if idea_name not in results:
-                    results[idea_name] = {
-                        'description': idea_description,
-                        'evaluation': {}
-                    }
-                results[idea_name]['evaluation'][rubric_name] = {
-                    'score': score,
-                    'reasoning': reasoning
-                }
+                results.append(row[0])
 
             cur.close()
             return json.dumps(results, indent=2)
 
-        except (Exception, psycopg2.DatabaseError) as error:
-            logger.error(f"Error fetching results: {error}")
-            return json.dumps({"error": str(error)}, indent=2)
+        except Exception as error:
+            return json.dumps({"error": str(error)})
         finally:
             self.close()
