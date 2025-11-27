@@ -154,9 +154,14 @@ class DBHelper:
                 db_idea_id INTEGER REFERENCES ideas(db_idea_id) ON DELETE CASCADE,
                 primary_theme VARCHAR(255),
                 secondary_themes TEXT,
+                theme_confidence DECIMAL(5,2),
+                theme_rationale TEXT,
                 primary_industry VARCHAR(255),
                 secondary_industries TEXT,
-                technologies TEXT
+                industry_confidence DECIMAL(5,2),
+                industry_rationale TEXT,
+                technologies TEXT,
+                technologies_rationale TEXT
             )
             """,
             """
@@ -353,17 +358,24 @@ class DBHelper:
             cur.execute(
                 """
                 INSERT INTO classifications (
-                    db_idea_id, primary_theme, secondary_themes, 
-                    primary_industry, secondary_industries, technologies
-                ) VALUES (%s, %s, %s, %s, %s, %s)
+                    db_idea_id, 
+                    primary_theme, secondary_themes, theme_confidence, theme_rationale,
+                    primary_industry, secondary_industries, industry_confidence, industry_rationale,
+                    technologies, technologies_rationale
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     db_idea_id,
                     theme_data.get('primary_theme'),
                     to_str(theme_data.get('secondary_themes')),
-                    industry_data.get('primary_industry'),
+                    theme_data.get('confidence'),
+                    theme_data.get('rationale'),
+                    industry_data.get('primary_industry') or industry_data.get('industry_name'), # Handle industry_name key
                     to_str(industry_data.get('secondary_industries')),
-                    json.dumps(tech_data) # Store full tech object as json or text
+                    industry_data.get('confidence'),
+                    industry_data.get('rationale'),
+                    to_str(tech_data.get('technologies_extracted') or tech_data.get('technologies')), # Handle extracted vs raw
+                    tech_data.get('rationale')
                 )
             )
 
@@ -375,19 +387,23 @@ class DBHelper:
             
             for r_name, r_val in eval_data.items():
                 # Skip metadata keys
-                if r_name.upper() in ['SCHEMA_VERSION', 'RUBRIC_WEIGHTS', 'WEIGHTED_TOTAL', 'INVESTMENT_RECOMMENDATION', 'KEY_STRENGTHS', 'KEY_CONCERNS', 'ASSUMPTIONS', 'FLAGS', 'CRITERIA']:
+                if r_name.upper() in ['SCHEMA_VERSION', 'RUBRIC_WEIGHTS', 'WEIGHTED_TOTAL', 'INVESTMENT_RECOMMENDATION', 'KEY_STRENGTHS', 'KEY_CONCERNS', 'ASSUMPTIONS', 'FLAGS', 'CRITERIA', 'PROTOTYPE_BONUS_APPLIED']:
                     continue
                 
                 score = None
                 reasoning = None
                 if isinstance(r_val, dict):
                     score = r_val.get('score')
-                    reasoning = r_val.get('reasoning')
+                    # Check for reasoning OR justification
+                    reasoning = r_val.get('reasoning') or r_val.get('justification')
                 else:
                     score = r_val # Assume it's just the score
                 
                 # Ensure score is float-compatible
                 if score is not None:
+                    # Handle boolean scores just in case
+                    if isinstance(score, bool):
+                         continue # Skip boolean flags that aren't in ignore list
                     try:
                         float(score)
                         cur.execute(
@@ -398,14 +414,14 @@ class DBHelper:
                         logger.warning(f"Invalid score for rubric {r_name}: {score}")
 
             # 5. Insert into VERIFICATIONS table
-            verif_data = llm_out.get('verification', {})
+            verif_data = idea_data.get('verification', {}) # Get from root idea_data, NOT llm_out
             cur.execute(
                 "INSERT INTO verifications (db_idea_id, status, comments, flagged_issues) VALUES (%s, %s, %s, %s)",
                 (
                     db_idea_id,
-                    verif_data.get('status'),
-                    verif_data.get('comments'),
-                    json.dumps(verif_data.get('flagged_issues'))
+                    verif_data.get('verification_status') or verif_data.get('status'),
+                    str(verif_data.get('warnings', '')) if verif_data.get('warnings') else verif_data.get('comments'),
+                    json.dumps(verif_data) # Store full object for debugging/completeness
                 )
             )
 

@@ -11,14 +11,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import json
 import time
+from datetime import datetime
+import os
+import shutil
 
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config.config import (
     GEMINI_API_KEY, GEMINI_MODEL, DATA_DIR,
-    ADDITIONAL_FILES_DIR, LOG_FILE, LOG_LEVEL
+    ADDITIONAL_FILES_DIR, LOG_LEVEL
 )
+# LOG_FILE is not imported because we calculate it dynamically now
+
 from llm.gemini_provider import GeminiProvider
 from llm.azure_openai_provider import AzureOpenAIProvider
 from app_io.input_helper import InputHelper
@@ -26,31 +31,13 @@ from app_io.output_helper import OutputHelper
 from core.idea_processor import IdeaProcessor
 from utils.db_helper import DBHelper
 
-# --- Logging Setup ---
-print(f"DEBUG: Log file path is set to: {LOG_FILE}")
-
-# Force-reset logging configuration
-root_logger = logging.getLogger()
-if root_logger.handlers:
-    for handler in root_logger.handlers:
-        root_logger.removeHandler(handler)
-
-# Create handlers
-file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a') # Append mode
-file_handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.WARNING)
-stream_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-
-# Configure root logger
-root_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
-root_logger.addHandler(file_handler)
-root_logger.addHandler(stream_handler)
-
+# --- Initial Logging Setup (Console only initially) ---
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
-logger.info("--- Logging Initialized ---") # Immediate test write
 
 # --- Main Application ---
 def main():
@@ -61,18 +48,55 @@ def main():
     print("🎯 MODULAR HACKATHON EVALUATION PIPELINE")
     print("="*80 + "\n")
     
-    logger.info("----------------------------------------------------------------")
-    logger.info("   STARTING PIPELINE EXECUTION")
-    logger.info("----------------------------------------------------------------")
-
     parser = argparse.ArgumentParser(description="Modular Hackathon Evaluation Pipeline")
     parser.add_argument('--ideas_filepath', type=Path, required=True, help="Path to the ideas XLSX file.")
     parser.add_argument('--rubrics_filepath', type=Path, required=True, help="Path to the rubrics JSON file.")
-    parser.add_argument('--output_filepath', type=Path, required=True, help="Path to the output JSON file.")
-    parser.add_argument('--progress_filepath', type=Path, help="Path to where progress should be stored.")
+    parser.add_argument('--output_filepath', type=Path, required=True, help="Path to the output JSON file (filename only).") # Changed help
+    parser.add_argument('--progress_filepath', type=Path, help="Path to where progress should be stored (filename only).") # Changed help
     parser.add_argument('--hackathon_name', type=str, default="Hackathon", help="Name of the hackathon.")
     parser.add_argument('--hackathon_description', type=str, default="", help="Description of the hackathon.")
     args = parser.parse_args()
+
+    # --- Dynamic Folder Creation ---
+    timestamp = datetime.now().strftime('%d%m%Y_%H%M')
+    # Sanitize hackathon name for folder use
+    safe_name = "".join(c for c in args.hackathon_name if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
+    session_dir_name = f"{safe_name}_{timestamp}"
+    session_dir = DATA_DIR / session_dir_name
+    session_dir.mkdir(parents=True, exist_ok=True)
+    print(f"📂 Output Directory Created: {session_dir}")
+    
+    # We DO NOT overwrite args.output_filepath or args.progress_filepath here.
+    # The API expects them at the specific location it asked for.
+    # We will copy the final result to session_dir for archival later.
+    
+    log_file_path = session_dir / "pipeline.log"
+
+    # --- Re-configure Logging for File Output ---
+    root_logger = logging.getLogger()
+    # Remove existing handlers (the initial console one)
+    if root_logger.handlers:
+        for handler in root_logger.handlers:
+            root_logger.removeHandler(handler)
+            
+    # New File Handler
+    file_handler = logging.FileHandler(log_file_path, encoding='utf-8', mode='a')
+    file_handler.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+    # New Console Handler
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.WARNING)
+    stream_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+
+    root_logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(stream_handler)
+    
+    logger.info("----------------------------------------------------------------")
+    logger.info(f"   STARTING PIPELINE EXECUTION: {session_dir_name}")
+    logger.info("----------------------------------------------------------------")
+    print(f"📝 Logging to: {log_file_path}")
 
     # --- DB Setup ---
     db_helper = DBHelper()
@@ -211,12 +235,20 @@ def main():
     # --- Finalization ---
     print(f"\n💾 Results have been incrementally saved to {output_filepath}")
     update_progress(processed_ideas_count, total_ideas, 'completed', eta_seconds=0)
+    
+    # Archive the result file
+    try:
+        archive_path = session_dir / output_filepath.name
+        shutil.copy2(output_filepath, archive_path)
+        print(f"📦 Result file archived to: {archive_path}")
+    except Exception as e:
+        logger.warning(f"Failed to archive result file: {e}")
 
     if hackathon_id:
         print(f"\n✓ All results stored in database for Hackathon ID: {hackathon_id}")
         # Optionally, generate the final JSON from the DB
         json_from_db = db_helper.get_results_as_json(hackathon_id)
-        db_json_output_path = output_filepath.parent / f"db_results_{hackathon_id}.json"
+        db_json_output_path = session_dir / f"db_results_{hackathon_id}.json"
         try:
             with open(db_json_output_path, 'w') as f:
                 f.write(json_from_db)
