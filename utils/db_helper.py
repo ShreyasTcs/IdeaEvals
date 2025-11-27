@@ -428,7 +428,11 @@ class DBHelper:
 
 
             # 5. Insert into VERIFICATIONS table
-            verif_data = idea_data.get('verification', {}) # Get from root idea_data
+            # Try to find verification data in root or nested in llm_output
+            verif_data = idea_data.get('verification')
+            if not verif_data:
+                verif_data = idea_data.get('llm_output', {}).get('verification', {})
+            
             logger.info(f"Inserting verification data: {verif_data}") # Debug log
             
             # Robust extraction
